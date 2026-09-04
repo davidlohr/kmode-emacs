@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Emacs ${{ matrix.emacs-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        emacs-version:
+          - "28.1"
+          - "29.4"
+          - "30.2"
+
+    steps:
+      - name: Check out sources
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Emacs
+        uses: purcell/setup-emacs@34c6ded44899fd1bf74d2889558befd1750e61a7 # master, 2026-09-05
+        with:
+          version: ${{ matrix.emacs-version }}
+
+      - name: Show Emacs version
+        run: emacs --version
+
+      - name: Compile, test, and lint
+        run: make check
+
+      - name: Remove byte-compiled artifacts
+        if: always()
+        run: make clean

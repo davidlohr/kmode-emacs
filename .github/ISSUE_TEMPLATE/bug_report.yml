@@ -1,0 +1,71 @@
+name: Bug report
+description: Report reproducible incorrect behavior in Kemacs
+title: "bug: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for helping improve Kemacs. For vulnerabilities, use the private route in `SECURITY.md` instead of this form.
+  - type: input
+    id: commit
+    attributes:
+      label: Kemacs commit
+      description: The output of `git rev-parse HEAD` from your Kemacs checkout.
+    validations:
+      required: true
+  - type: input
+    id: emacs
+    attributes:
+      label: Emacs version
+      placeholder: GNU Emacs 30.2
+    validations:
+      required: true
+  - type: input
+    id: kernel
+    attributes:
+      label: Kernel tree and revision
+      description: Upstream version/commit or a non-sensitive description of your tree.
+    validations:
+      required: true
+  - type: textarea
+    id: profile
+    attributes:
+      label: Sanitized Kemacs profile
+      description: Remove credentials, private paths, hostnames, and guest image details.
+      render: elisp
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      description: Include the Kemacs command/key and the smallest sequence that reproduces the problem.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: textarea
+    id: observed
+    attributes:
+      label: Observed behavior and output
+      description: Include relevant `kemacs-doctor` and process-buffer output after removing sensitive data.
+    validations:
+      required: true
+  - type: input
+    id: vng
+    attributes:
+      label: virtme-ng version
+      description: If the issue involves vng, include `vng --version`; otherwise write “not applicable.”
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checks
+      options:
+        - label: I reproduced this from `emacs -Q` or described why I could not.
+          required: true
+        - label: I removed credentials and private host, path, source, and image information.
+          required: true

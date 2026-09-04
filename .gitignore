@@ -1,0 +1,11 @@
+# Emacs build and editor artifacts
+*.elc
+*.eln
+*~
+\#*\#
+.#*
+/auto-save-list/
+
+# Local agent workspace state
+/.agents/
+/.codex/
