@@ -1,5 +1,5 @@
 name: Bug report
-description: Report reproducible incorrect behavior in Kemacs
+description: Report reproducible incorrect behavior in kmode-emacs
 title: "bug: "
 labels:
   - bug
@@ -7,12 +7,12 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for helping improve Kemacs. For vulnerabilities, use the private route in `SECURITY.md` instead of this form.
+        Thanks for helping improve kmode-emacs. For vulnerabilities, use the private route in `SECURITY.md` instead of this form.
   - type: input
     id: commit
     attributes:
-      label: Kemacs commit
-      description: The output of `git rev-parse HEAD` from your Kemacs checkout.
+      label: kmode-emacs commit
+      description: The output of `git rev-parse HEAD` from your kmode-emacs checkout.
     validations:
       required: true
   - type: input
@@ -32,14 +32,14 @@ body:
   - type: textarea
     id: profile
     attributes:
-      label: Sanitized Kemacs profile
+      label: Sanitized kmode-emacs profile
       description: Remove credentials, private paths, hostnames, and guest image details.
       render: elisp
   - type: textarea
     id: reproduce
     attributes:
       label: Reproduction steps
-      description: Include the Kemacs command/key and the smallest sequence that reproduces the problem.
+      description: Include the kmode-emacs command/key and the smallest sequence that reproduces the problem.
     validations:
       required: true
   - type: textarea
@@ -52,7 +52,7 @@ body:
     id: observed
     attributes:
       label: Observed behavior and output
-      description: Include relevant `kemacs-doctor` and process-buffer output after removing sensitive data.
+      description: Include relevant `kmode-doctor` and process-buffer output after removing sensitive data.
     validations:
       required: true
   - type: input

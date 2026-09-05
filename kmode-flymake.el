@@ -1,8 +1,8 @@
-;;; kemacs-flymake.el --- Live checkpatch diagnostics for Kemacs -*- lexical-binding: t; -*-
+;;; kmode-flymake.el --- Live checkpatch diagnostics for kmode-emacs -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
 
-;; Author: Kemacs contributors
+;; Author: kmode-emacs contributors
 ;; Keywords: tools, c, linux
 ;; Package-Requires: ((emacs "28.1"))
 
@@ -16,86 +16,86 @@
 
 (require 'cl-lib)
 (require 'flymake)
-(require 'kemacs-core)
+(require 'kmode-core)
 (require 'subr-x)
 
-(defgroup kemacs-flymake nil
+(defgroup kmode-flymake nil
   "Live kernel source diagnostics from checkpatch."
-  :group 'kemacs
-  :prefix "kemacs-checkpatch-flymake-")
+  :group 'kmode
+  :prefix "kmode-checkpatch-flymake-")
 
-(defcustom kemacs-checkpatch-flymake-arguments '("--strict")
+(defcustom kmode-checkpatch-flymake-arguments '("--strict")
   "Additional checkpatch arguments used for live diagnostics.
 
-Each item is passed directly to checkpatch.pl as one process argument.  Kemacs
-always adds `--no-tree', `--file', and the temporary source path."
+Each item is passed directly to checkpatch.pl as one process argument.
+Kmode-emacs always adds `--no-tree', `--file', and the temporary source path."
   :type '(repeat string)
-  :group 'kemacs-flymake)
+  :group 'kmode-flymake)
 
-(defcustom kemacs-checkpatch-flymake-extensions
+(defcustom kmode-checkpatch-flymake-extensions
   '(".c" ".h" ".S" ".s" ".rs")
   "Source extensions accepted by live checkpatch diagnostics."
   :type '(repeat string)
-  :group 'kemacs-flymake)
+  :group 'kmode-flymake)
 
-(defvar-local kemacs-checkpatch-flymake--process nil
+(defvar-local kmode-checkpatch-flymake--process nil
   "Current checkpatch process for this source buffer.")
 
-(defvar-local kemacs-checkpatch-flymake--request nil
+(defvar-local kmode-checkpatch-flymake--request nil
   "Identity token of the current live checkpatch request.")
 
-(defvar-local kemacs-checkpatch-flymake--temporary-file nil
+(defvar-local kmode-checkpatch-flymake--temporary-file nil
   "Temporary source snapshot used by the current checkpatch process.")
 
-(defvar-local kemacs-checkpatch-flymake--output-buffer nil
+(defvar-local kmode-checkpatch-flymake--output-buffer nil
   "Process output buffer used by the current checkpatch process.")
 
-(defvar-local kemacs-checkpatch-flymake--report-function nil
+(defvar-local kmode-checkpatch-flymake--report-function nil
   "Most recent Flymake report callback for this backend.")
 
-(defvar-local kemacs-checkpatch-flymake--started-flymake nil
+(defvar-local kmode-checkpatch-flymake--started-flymake nil
   "Non-nil when live checkpatch enabled `flymake-mode' itself.")
 
-(defconst kemacs-checkpatch-flymake--heading-regexp
+(defconst kmode-checkpatch-flymake--heading-regexp
   "^[ \t]*\\(ERROR\\|WARNING\\|CHECK\\)[ \t]*:[ \t]*\\(.*\\)$"
   "Regexp matching a checkpatch diagnostic heading.")
 
-(defconst kemacs-checkpatch-flymake--location-regexp
+(defconst kmode-checkpatch-flymake--location-regexp
   (concat "^[ \t]*\\(?:#[0-9]+:[ \t]*\\)?"
           "FILE:[ \t]*\\(.+?\\):\\([0-9]+\\)"
           "\\(?::\\([0-9]+\\)\\)?:[ \t]*$")
   "Regexp matching a checkpatch FILE location line.")
 
-(defun kemacs-checkpatch-flymake--source-extension ()
+(defun kmode-checkpatch-flymake--source-extension ()
   "Return a suitable temporary-file extension for the current buffer."
   (let ((extension (and buffer-file-name
                         (file-name-extension buffer-file-name t))))
     (cond
-     ((member extension kemacs-checkpatch-flymake-extensions) extension)
+     ((member extension kmode-checkpatch-flymake-extensions) extension)
      ((memq major-mode '(rust-mode rust-ts-mode)) ".rs")
      ((derived-mode-p 'asm-mode) ".S")
      ((or (derived-mode-p 'c-mode) (derived-mode-p 'c-ts-mode)) ".c"))))
 
-(defun kemacs-checkpatch-flymake--tool (context)
+(defun kmode-checkpatch-flymake--tool (context)
   "Return CONTEXT's executable in-tree checkpatch path, or nil."
   (let ((tool (expand-file-name "scripts/checkpatch.pl"
-                                (kemacs-context-root context))))
+                                (kmode-context-root context))))
     (and (file-executable-p tool) tool)))
 
-(defun kemacs-checkpatch-flymake--require-tool (context)
+(defun kmode-checkpatch-flymake--require-tool (context)
   "Return CONTEXT's in-tree checkpatch path or signal an actionable error."
-  (or (kemacs-checkpatch-flymake--tool context)
+  (or (kmode-checkpatch-flymake--tool context)
       (user-error
        "Live checkpatch needs executable scripts/checkpatch.pl in this kernel tree")))
 
-(defun kemacs-checkpatch-flymake--diagnostic-type (severity)
+(defun kmode-checkpatch-flymake--diagnostic-type (severity)
   "Return the Flymake diagnostic type corresponding to SEVERITY."
   (pcase severity
     ("ERROR" :error)
     ("WARNING" :warning)
     (_ :note)))
 
-(defun kemacs-checkpatch-flymake--make-diagnostic
+(defun kmode-checkpatch-flymake--make-diagnostic
     (source line column severity message)
   "Create a SOURCE diagnostic at LINE and COLUMN for SEVERITY and MESSAGE."
   (let* ((region (or (flymake-diag-region source line column)
@@ -105,11 +105,11 @@ always adds `--no-tree', `--file', and the temporary source path."
                  (format "checkpatch %s: %s" severity message))))
     (when region
       (flymake-make-diagnostic source (car region) (cdr region)
-                               (kemacs-checkpatch-flymake--diagnostic-type
+                               (kmode-checkpatch-flymake--diagnostic-type
                                 severity)
                                text))))
 
-(defun kemacs-checkpatch-flymake--parse-output (output source)
+(defun kmode-checkpatch-flymake--parse-output (output source)
   "Parse checkpatch OUTPUT into Flymake diagnostics for SOURCE."
   (let (pending-severity pending-message diagnostics)
     (when (and (buffer-live-p output) (buffer-live-p source))
@@ -120,20 +120,20 @@ always adds `--no-tree', `--file', and the temporary source path."
               (goto-char (point-min))
               (while (not (eobp))
                 (cond
-                 ((looking-at kemacs-checkpatch-flymake--heading-regexp)
+                 ((looking-at kmode-checkpatch-flymake--heading-regexp)
                   (setq pending-severity (match-string-no-properties 1)
                         pending-message
                         (string-trim (match-string-no-properties 2))))
                  ((and pending-severity
                        (looking-at
-                        kemacs-checkpatch-flymake--location-regexp))
+                        kmode-checkpatch-flymake--location-regexp))
                   (let* ((line (string-to-number
                                 (match-string-no-properties 2)))
                          (column-text (match-string-no-properties 3))
                          (column (and column-text
                                       (string-to-number column-text)))
                          (diagnostic
-                          (kemacs-checkpatch-flymake--make-diagnostic
+                          (kmode-checkpatch-flymake--make-diagnostic
                            source line column pending-severity
                            pending-message)))
                     (when diagnostic
@@ -143,34 +143,34 @@ always adds `--no-tree', `--file', and the temporary source path."
                 (forward-line 1)))))))
     (nreverse diagnostics)))
 
-(defun kemacs-checkpatch-flymake--cleanup-files (temporary output)
+(defun kmode-checkpatch-flymake--cleanup-files (temporary output)
   "Delete TEMPORARY and kill the process OUTPUT buffer when they exist."
   (when (and temporary (file-exists-p temporary))
     (ignore-errors (delete-file temporary)))
   (when (buffer-live-p output)
     (kill-buffer output)))
 
-(defun kemacs-checkpatch-flymake--cancel ()
+(defun kmode-checkpatch-flymake--cancel ()
   "Cancel and clean the current buffer's live checkpatch request."
-  (let ((process kemacs-checkpatch-flymake--process)
-        (temporary kemacs-checkpatch-flymake--temporary-file)
-        (output kemacs-checkpatch-flymake--output-buffer))
+  (let ((process kmode-checkpatch-flymake--process)
+        (temporary kmode-checkpatch-flymake--temporary-file)
+        (output kmode-checkpatch-flymake--output-buffer))
     ;; Clear identity first so a queued sentinel can never report stale data.
-    (setq kemacs-checkpatch-flymake--request nil
-          kemacs-checkpatch-flymake--process nil
-          kemacs-checkpatch-flymake--temporary-file nil
-          kemacs-checkpatch-flymake--output-buffer nil)
+    (setq kmode-checkpatch-flymake--request nil
+          kmode-checkpatch-flymake--process nil
+          kmode-checkpatch-flymake--temporary-file nil
+          kmode-checkpatch-flymake--output-buffer nil)
     (when (processp process)
       (set-process-sentinel process #'ignore)
       (when (process-live-p process)
         (delete-process process)))
-    (kemacs-checkpatch-flymake--cleanup-files temporary output)))
+    (kmode-checkpatch-flymake--cleanup-files temporary output)))
 
-(defun kemacs-checkpatch-flymake--report-panic (report-function explanation)
+(defun kmode-checkpatch-flymake--report-panic (report-function explanation)
   "Call REPORT-FUNCTION with a Flymake panic and EXPLANATION."
   (funcall report-function :panic :explanation explanation))
 
-(defun kemacs-checkpatch-flymake--sentinel
+(defun kmode-checkpatch-flymake--sentinel
     (process _event source report-function request temporary output)
   "Handle PROCESS completion for SOURCE using REPORT-FUNCTION.
 
@@ -179,45 +179,45 @@ REQUEST identifies the invocation that owns TEMPORARY and OUTPUT."
     (unwind-protect
         (when (buffer-live-p source)
           (with-current-buffer source
-            (when (eq request kemacs-checkpatch-flymake--request)
-              (setq kemacs-checkpatch-flymake--request nil
-                    kemacs-checkpatch-flymake--process nil
-                    kemacs-checkpatch-flymake--temporary-file nil
-                    kemacs-checkpatch-flymake--output-buffer nil)
+            (when (eq request kmode-checkpatch-flymake--request)
+              (setq kmode-checkpatch-flymake--request nil
+                    kmode-checkpatch-flymake--process nil
+                    kmode-checkpatch-flymake--temporary-file nil
+                    kmode-checkpatch-flymake--output-buffer nil)
               (if (eq (process-status process) 'signal)
-                  (kemacs-checkpatch-flymake--report-panic
+                  (kmode-checkpatch-flymake--report-panic
                    report-function "Live checkpatch process was interrupted")
                 ;; checkpatch normally exits nonzero when it found diagnostics,
                 ;; so its parsed output, rather than its status, is authoritative.
                 (funcall report-function
-                         (kemacs-checkpatch-flymake--parse-output
+                         (kmode-checkpatch-flymake--parse-output
                           output source))))))
-      (kemacs-checkpatch-flymake--cleanup-files temporary output))))
+      (kmode-checkpatch-flymake--cleanup-files temporary output))))
 
-(defun kemacs-checkpatch-flymake (report-function &rest _arguments)
+(defun kmode-checkpatch-flymake (report-function &rest _arguments)
   "Run asynchronous checkpatch and call REPORT-FUNCTION with diagnostics."
-  (setq kemacs-checkpatch-flymake--report-function report-function)
-  (kemacs-checkpatch-flymake--cancel)
+  (setq kmode-checkpatch-flymake--report-function report-function)
+  (kmode-checkpatch-flymake--cancel)
   (let ((source (current-buffer))
-        (extension (kemacs-checkpatch-flymake--source-extension))
+        (extension (kmode-checkpatch-flymake--source-extension))
         request
         temporary
         output)
     (condition-case error-data
-        (let* ((context (kemacs-resolve-context))
-               (root (kemacs-context-root context))
-               (tool (kemacs-checkpatch-flymake--require-tool context)))
+        (let* ((context (kmode-resolve-context))
+               (root (kmode-context-root context))
+               (tool (kmode-checkpatch-flymake--require-tool context)))
           (unless extension
             (user-error "Live checkpatch supports only C, assembly, and Rust buffers"))
-          (unless (and (listp kemacs-checkpatch-flymake-arguments)
+          (unless (and (listp kmode-checkpatch-flymake-arguments)
                        (cl-every #'stringp
-                                 kemacs-checkpatch-flymake-arguments))
+                                 kmode-checkpatch-flymake-arguments))
             (user-error
-             "kemacs-checkpatch-flymake-arguments must contain only strings"))
+             "kmode-checkpatch-flymake-arguments must contain only strings"))
           (setq temporary
-                (make-temp-file "kemacs-checkpatch-" nil extension)
+                (make-temp-file "kmode-checkpatch-" nil extension)
                 output
-                (generate-new-buffer " *kemacs-checkpatch-flymake*"))
+                (generate-new-buffer " *kmode-checkpatch-flymake*"))
           (let ((coding-system-for-write buffer-file-coding-system))
             (save-restriction
               (widen)
@@ -225,20 +225,20 @@ REQUEST identifies the invocation that owns TEMPORARY and OUTPUT."
                             temporary nil 'silent)))
           ;; Install request ownership before spawning.  A very short-lived
           ;; process may run its sentinel from inside `make-process'.
-          (setq request (make-symbol "kemacs-checkpatch-request")
-                kemacs-checkpatch-flymake--request request
-                kemacs-checkpatch-flymake--process nil
-                kemacs-checkpatch-flymake--temporary-file temporary
-                kemacs-checkpatch-flymake--output-buffer output)
+          (setq request (make-symbol "kmode-checkpatch-request")
+                kmode-checkpatch-flymake--request request
+                kmode-checkpatch-flymake--process nil
+                kmode-checkpatch-flymake--temporary-file temporary
+                kmode-checkpatch-flymake--output-buffer output)
           (let* ((default-directory root)
                  (command
                   (append (list tool "--no-tree")
-                          kemacs-checkpatch-flymake-arguments
+                          kmode-checkpatch-flymake-arguments
                           (list "--file" temporary)))
                  process)
             (setq process
                   (make-process
-                   :name (format "kemacs-checkpatch:%s" (buffer-name source))
+                   :name (format "kmode-checkpatch:%s" (buffer-name source))
                    :buffer output
                    :command command
                    :connection-type 'pipe
@@ -246,110 +246,110 @@ REQUEST identifies the invocation that owns TEMPORARY and OUTPUT."
                    :noquery t
                    :sentinel
                    (lambda (finished-process event)
-                     (kemacs-checkpatch-flymake--sentinel
+                     (kmode-checkpatch-flymake--sentinel
                       finished-process event source report-function
                       request temporary output))))
-            (if (eq request kemacs-checkpatch-flymake--request)
-                (setq kemacs-checkpatch-flymake--process process)
+            (if (eq request kmode-checkpatch-flymake--request)
+                (setq kmode-checkpatch-flymake--process process)
               ;; Completion or cancellation won the race while spawning.
               (when (processp process)
                 (set-process-sentinel process #'ignore)
                 (when (process-live-p process)
                   (delete-process process)))
-              (kemacs-checkpatch-flymake--cleanup-files temporary output))))
+              (kmode-checkpatch-flymake--cleanup-files temporary output))))
       (quit
        (when (or (null request)
-                 (eq request kemacs-checkpatch-flymake--request))
-         (setq kemacs-checkpatch-flymake--request nil
-               kemacs-checkpatch-flymake--process nil
-               kemacs-checkpatch-flymake--temporary-file nil
-               kemacs-checkpatch-flymake--output-buffer nil))
-       (kemacs-checkpatch-flymake--cleanup-files temporary output)
+                 (eq request kmode-checkpatch-flymake--request))
+         (setq kmode-checkpatch-flymake--request nil
+               kmode-checkpatch-flymake--process nil
+               kmode-checkpatch-flymake--temporary-file nil
+               kmode-checkpatch-flymake--output-buffer nil))
+       (kmode-checkpatch-flymake--cleanup-files temporary output)
        (signal 'quit nil))
       (error
        (let ((owns-request
               (or (null request)
-                  (eq request kemacs-checkpatch-flymake--request))))
+                  (eq request kmode-checkpatch-flymake--request))))
          (when (and request owns-request)
-           (setq kemacs-checkpatch-flymake--request nil
-                 kemacs-checkpatch-flymake--process nil
-                 kemacs-checkpatch-flymake--temporary-file nil
-                 kemacs-checkpatch-flymake--output-buffer nil))
-         (kemacs-checkpatch-flymake--cleanup-files temporary output)
+           (setq kmode-checkpatch-flymake--request nil
+                 kmode-checkpatch-flymake--process nil
+                 kmode-checkpatch-flymake--temporary-file nil
+                 kmode-checkpatch-flymake--output-buffer nil))
+         (kmode-checkpatch-flymake--cleanup-files temporary output)
          ;; Do not emit a second report if a synchronous sentinel already
          ;; completed this request before `make-process' returned.
          (when owns-request
-           (kemacs-checkpatch-flymake--report-panic
+           (kmode-checkpatch-flymake--report-panic
             report-function (error-message-string error-data))))))))
 
-(defun kemacs-checkpatch-flymake-available-p ()
+(defun kmode-checkpatch-flymake-available-p ()
   "Return non-nil when live checkpatch can run in the current buffer."
-  (or (bound-and-true-p kemacs-checkpatch-flymake-mode)
-      (and (kemacs-checkpatch-flymake--source-extension)
+  (or (bound-and-true-p kmode-checkpatch-flymake-mode)
+      (and (kmode-checkpatch-flymake--source-extension)
            (condition-case nil
-               (when-let ((root (kemacs-root t)))
-                 (kemacs-checkpatch-flymake--tool
-                  (kemacs-resolve-context root)))
+               (when-let ((root (kmode-root t)))
+                 (kmode-checkpatch-flymake--tool
+                  (kmode-resolve-context root)))
              (error nil)))))
 
 ;;;###autoload
-(define-minor-mode kemacs-checkpatch-flymake-mode
+(define-minor-mode kmode-checkpatch-flymake-mode
   "Toggle live checkpatch diagnostics in the current kernel source buffer.
 
 This mode adds one asynchronous backend to `flymake-diagnostic-functions'.
 It preserves other backends, including Eglot, and is disabled by default."
   :lighter " CP"
-  :group 'kemacs-flymake
-  (if kemacs-checkpatch-flymake-mode
+  :group 'kmode-flymake
+  (if kmode-checkpatch-flymake-mode
       (condition-case error-data
           (progn
-            (let* ((root (kemacs-root))
-                   (context (kemacs-resolve-context root)))
-              (kemacs-checkpatch-flymake--require-tool context))
-            (unless (kemacs-checkpatch-flymake--source-extension)
+            (let* ((root (kmode-root))
+                   (context (kmode-resolve-context root)))
+              (kmode-checkpatch-flymake--require-tool context))
+            (unless (kmode-checkpatch-flymake--source-extension)
               (user-error
                "Live checkpatch supports only C, assembly, and Rust buffers"))
             (add-hook 'flymake-diagnostic-functions
-                      #'kemacs-checkpatch-flymake t t)
+                      #'kmode-checkpatch-flymake t t)
             (add-hook 'kill-buffer-hook
-                      #'kemacs-checkpatch-flymake--cancel nil t)
-            (setq kemacs-checkpatch-flymake--started-flymake
+                      #'kmode-checkpatch-flymake--cancel nil t)
+            (setq kmode-checkpatch-flymake--started-flymake
                   (not flymake-mode))
             (if flymake-mode
                 (flymake-start nil t)
               (flymake-mode 1)))
         ((error quit)
-         (setq kemacs-checkpatch-flymake-mode nil)
+         (setq kmode-checkpatch-flymake-mode nil)
          (remove-hook 'flymake-diagnostic-functions
-                      #'kemacs-checkpatch-flymake t)
+                      #'kmode-checkpatch-flymake t)
          (remove-hook 'kill-buffer-hook
-                      #'kemacs-checkpatch-flymake--cancel t)
-         (kemacs-checkpatch-flymake--cancel)
-         (when kemacs-checkpatch-flymake--started-flymake
-           (setq kemacs-checkpatch-flymake--started-flymake nil)
+                      #'kmode-checkpatch-flymake--cancel t)
+         (kmode-checkpatch-flymake--cancel)
+         (when kmode-checkpatch-flymake--started-flymake
+           (setq kmode-checkpatch-flymake--started-flymake nil)
            (when flymake-mode
              (flymake-mode -1)))
          (signal (car error-data) (cdr error-data))))
-    (when kemacs-checkpatch-flymake--report-function
+    (when kmode-checkpatch-flymake--report-function
       (ignore-errors
-        (funcall kemacs-checkpatch-flymake--report-function nil)))
-    (setq kemacs-checkpatch-flymake--report-function nil)
+        (funcall kmode-checkpatch-flymake--report-function nil)))
+    (setq kmode-checkpatch-flymake--report-function nil)
     (remove-hook 'flymake-diagnostic-functions
-                 #'kemacs-checkpatch-flymake t)
+                 #'kmode-checkpatch-flymake t)
     (remove-hook 'kill-buffer-hook
-                 #'kemacs-checkpatch-flymake--cancel t)
-    (kemacs-checkpatch-flymake--cancel)
-    (when kemacs-checkpatch-flymake--started-flymake
-      (setq kemacs-checkpatch-flymake--started-flymake nil)
+                 #'kmode-checkpatch-flymake--cancel t)
+    (kmode-checkpatch-flymake--cancel)
+    (when kmode-checkpatch-flymake--started-flymake
+      (setq kmode-checkpatch-flymake--started-flymake nil)
       (when flymake-mode
         (flymake-mode -1)))))
 
-(kemacs-register-action
+(kmode-register-action
  'checkpatch-flymake "Toggle live checkpatch" "Check"
- #'kemacs-checkpatch-flymake-mode
- :predicate #'kemacs-checkpatch-flymake-available-p
+ #'kmode-checkpatch-flymake-mode
+ :predicate #'kmode-checkpatch-flymake-available-p
  :description "Check unsaved C, assembly, and Rust buffers with checkpatch")
 
-(provide 'kemacs-flymake)
+(provide 'kmode-flymake)
 
-;;; kemacs-flymake.el ends here
+;;; kmode-flymake.el ends here

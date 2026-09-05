@@ -1,6 +1,6 @@
-# Getting started with Kemacs
+# Getting started with kmode-emacs
 
-This guide takes a fresh checkout from loading Kemacs to the short kernel
+This guide takes a fresh checkout from loading kmode-emacs to the short kernel
 development loop it is designed for:
 
 ```text
@@ -9,13 +9,13 @@ edit -> build/check -> navigate -> boot/test -> inspect/debug
           +---------- one build profile ---------+
 ```
 
-Kemacs is pre-1.0.  It makes kernel tooling faster to reach, but it does not
+kmode-emacs is pre-1.0.  It makes kernel tooling faster to reach, but it does not
 hide what is being run: build, test, review, QEMU, and virtme-ng actions show
 their command lines in dedicated buffers or previews.
 
 ## Prerequisites
 
-Kemacs itself requires GNU Emacs 28.1 or newer and only Emacs Lisp libraries
+kmode-emacs itself requires GNU Emacs 28.1 or newer and only Emacs Lisp libraries
 shipped with Emacs.  Individual workflows need their usual host tools:
 
 - `make` and a configured Linux source tree for Kbuild;
@@ -34,28 +34,28 @@ Eglot package separately if you want clangd-backed navigation.  All heuristic
 include, Kconfig, Kbuild, source/header, and Documentation navigation remains
 available without Eglot.
 
-## Load Kemacs
+## Load kmode-emacs
 
 Clone the public repository into a stable directory:
 
 ```sh
-git clone https://github.com/davidlohr/kemacs-mode.git
+git clone https://github.com/davidlohr/kmode-emacs.git
 ```
 
 Then add the checkout to Emacs's `load-path`:
 
 ```elisp
-(add-to-list 'load-path "/absolute/path/to/kemacs-mode")
-(require 'kemacs-mode)
-(kemacs-global-mode 1)
+(add-to-list 'load-path "/absolute/path/to/kmode-emacs")
+(require 'kmode-emacs)
+(kmode-global-mode 1)
 ```
 
-`kemacs-global-mode` automatically enables the project minor mode only in
+`kmode-global-mode` automatically enables the project minor mode only in
 recognized kernel-tree buffers.  To opt in one buffer instead, omit the final
-line and run `M-x kemacs-mode` from a kernel checkout.
+line and run `M-x kmode-mode` from a kernel checkout.
 
 After updating the checkout, restart Emacs or evaluate the changed modules;
-Kemacs does not replace loaded definitions behind your back.
+kmode-emacs does not replace loaded definitions behind your back.
 
 ## Define a first build profile
 
@@ -64,9 +64,9 @@ for an already configured checkout, but an out-of-tree output keeps generated
 files out of the source tree and is the safer first setup:
 
 ```elisp
-(with-eval-after-load 'kemacs-core
+(with-eval-after-load 'kmode-core
   (add-to-list
-   'kemacs-profiles
+   'kmode-profiles
    '("x86-clang"
      :description "Native x86-64 kernel with Clang"
      :arch "x86_64"
@@ -79,7 +79,7 @@ files out of the source tree and is the safer first setup:
 ```
 
 Change the architecture, compiler, output path, and artifact names to match
-your kernel.  Kemacs resolves relative output paths from the source root and
+your kernel.  kmode-emacs resolves relative output paths from the source root and
 uses the same resulting context for builds, clangd, tests, logs, QEMU, and
 virtme-ng.  Do not mix artifacts from different configurations in one profile.
 
@@ -97,7 +97,7 @@ virtme-ng.  Do not mix artifacts from different configurations in one profile.
    (`C-u C-c k SPC`) also lists unavailable actions and why they are disabled.
 
 Compilation output uses Emacs Compilation mode, so `next-error` and
-`previous-error` visit diagnostics normally.  Kemacs serializes jobs that
+`previous-error` visit diagnostics normally.  kmode-emacs serializes jobs that
 write the same output directory and `C-c k x` can interrupt a managed job.
 
 In the dashboard, `g` refreshes state, `p` selects a profile, and `d` runs the
@@ -107,7 +107,7 @@ doctor.
 
 The short answer is:
 
-| Task | Standard key | Kemacs key |
+| Task | Standard key | kmode-emacs key |
 | --- | --- | --- |
 | Definition at point | `M-.` | `C-c k n d` |
 | References/callers | `M-?` | `C-c k n r` |
@@ -119,8 +119,8 @@ semantic index.  Set it up for the active profile once its kernel output is
 configured:
 
 1. Install `clangd` and, on Emacs 28, Eglot.
-2. Select the correct Kemacs profile with `C-c k p`.
-3. Run `M-x kemacs-build-compile-commands` (or choose “Compile database” from
+2. Select the correct kmode-emacs profile with `C-c k p`.
+3. Run `M-x kmode-build-compile-commands` (or choose “Compile database” from
    `C-c k SPC`).  This can cause real Kbuild work.
 4. Run `C-c k n e` to start clangd against
    `<profile-output>/compile_commands.json`.
@@ -149,16 +149,16 @@ preprocessor or Kbuild dependency analysis.
 
 ## First virtme-ng workflow
 
-Kemacs integrates with the upstream **virtme-ng** project through its public
+kmode-emacs integrates with the upstream **virtme-ng** project through its public
 `vng` frontend.  There is no upstream `vng-ng` command.  If `vng` is absent,
-Kemacs also recognizes the official `virtme-ng` executable alias.
+kmode-emacs also recognizes the official `virtme-ng` executable alias.
 
 Start with a native profile whose output is separate from the source tree:
 
 ```elisp
-(with-eval-after-load 'kemacs-core
+(with-eval-after-load 'kmode-core
   (add-to-list
-   'kemacs-profiles
+   'kmode-profiles
    '("x86-vng"
      :description "Native LLVM kernel under virtme-ng"
      :arch "x86"
@@ -186,7 +186,7 @@ Then:
    to the managed debug guest.  A matching readable `vmlinux` is required.
 
 For a non-native guest, configure a supported public `:vng-arch` and an
-existing `:vng-root`.  Kemacs refuses to let a cross-architecture runtime
+existing `:vng-root`.  kmode-emacs refuses to let a cross-architecture runtime
 silently auto-provision a root through network or privileged operations.  See
 the full profile schema and trust model in the main README before adding
 disks, host directories, networking, SSH, devices, a custom QEMU, writable
@@ -225,7 +225,7 @@ an integration smoke test and inspect `C-c k v s` before launching it.
 - Run `C-c k ?` first when an action is unavailable.  It reports executable,
   artifact, architecture, guest-root, and vng configuration status.
 - Run `C-c k v s` before vng actions and inspect Compilation buffers for the
-  exact Kbuild/test command.  Kemacs never sends patch mail.
+  exact Kbuild/test command.  kmode-emacs never sends patch mail.
 - Do not put untrusted command fragments in profiles.  Tree-local scripts,
   Kbuild inputs, QEMU vectors, and guest commands can execute code.
 - Host-sensitive vng options require confirmation by default.  Nonempty
@@ -234,7 +234,7 @@ an integration smoke test and inspect `C-c k v s` before launching it.
 - If definition/caller lookup has no backend, confirm Eglot is installed,
   `clangd` is on Emacs's `exec-path`, the active output contains a readable
   `compile_commands.json`, and `C-c k n e` succeeded.
-- If Kemacs does not activate, run `M-x kemacs-mode` and verify all four root
+- If kmode-emacs does not activate, run `M-x kmode-mode` and verify all four root
   markers listed under Prerequisites exist at an ancestor of the current file.
 
 For every command and customization, continue with the

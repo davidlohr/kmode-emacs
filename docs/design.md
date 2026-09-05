@@ -1,21 +1,21 @@
-# Kemacs design
+# kmode-emacs design
 
 This document records both the architecture present in the source tree and the
 intended architecture for later milestones.  Labels are strict:
 
 - **Implemented** means the behavior exists in this checkout.
 - **Planned** means design work only; it is not available to users yet.
-- **Optional integration** means Kemacs should remain useful when that package
+- **Optional integration** means kmode-emacs should remain useful when that package
   or executable is missing.
 
-Kemacs is pre-1.0.  Extension interfaces are documented so that the internal
+kmode-emacs is pre-1.0.  Extension interfaces are documented so that the internal
 boundaries are reviewable, but compatibility is not yet guaranteed.
 
 ## Product goal
 
 The unit of work in kernel development is not just a file.  It is a source
 revision interpreted under one architecture, Kconfig, compiler, output tree,
-and runtime target.  Kemacs therefore treats a **profile-resolved kernel
+and runtime target.  kmode-emacs therefore treats a **profile-resolved kernel
 context** as the unit behind navigation, builds, checks, tests, review,
 symbolication, boot, and debugging.
 
@@ -32,7 +32,7 @@ commands, artifacts, and human decisions involved.
 
 ## Scope and non-goals
 
-Kemacs is an umbrella environment.  It adds a project-aware minor mode and
+kmode-emacs is an umbrella environment.  It adds a project-aware minor mode and
 purpose-built views; it should not replace `c-mode`, `c-ts-mode`, Xref,
 Eglot, Compilation mode, GDB, Magit, Notmuch, b4, Kbuild, or the kernel's own
 scripts.
@@ -49,9 +49,9 @@ the local build-and-debug foundation.
 
 ### Core contexts
 
-**Implemented in `kemacs-core.el`.**
+**Implemented in `kmode-core.el`.**
 
-`kemacs-context` is a `cl-defstruct` with these slots:
+`kmode-context` is a `cl-defstruct` with these slots:
 
 | Slot | Meaning |
 | --- | --- |
@@ -81,12 +81,12 @@ The resolver precedence is:
 2. properties in the selected named profile;
 3. package defaults.
 
-Profile selection itself is an explicit buffer-local `kemacs-profile`, then
+Profile selection itself is an explicit buffer-local `kmode-profile`, then
 the session-local selection stored for the root, then
-`kemacs-default-profile`.  `kemacs-select-profile` updates the root's session
-choice, refreshes `compile-command`, and runs `kemacs-profile-changed-hook`; it
-does not set `kemacs-profile` in the selecting buffer.  The top-level module's
-hook refreshes every enabled Kemacs buffer in the same worktree.  Selections
+`kmode-default-profile`.  `kmode-select-profile` updates the root's session
+choice, refreshes `compile-command`, and runs `kmode-profile-changed-hook`; it
+does not set `kmode-profile` in the selecting buffer.  The top-level module's
+hook refreshes every enabled kmode-emacs buffer in the same worktree.  Selections
 are not persisted across Emacs sessions.
 
 Relative `:output` values are expanded against the source root.  The runtime
@@ -95,9 +95,9 @@ output tree.  It expands `%i`, `%v`, `%o`, `%r`, and `%p` independently in each
 `:qemu-command` string and uses `:gdb-target` as the operand of GDB's
 `target remote`.  A relative `:vng-root` is expanded against the source root;
 the other vng lists are copied into the context and validated by
-`kemacs-virtme.el`.  Core itself does not interpret their argv semantics.
+`kmode-virtme.el`.  Core itself does not interpret their argv semantics.
 
-`kemacs-root-markers` defaults to all four of:
+`kmode-root-markers` defaults to all four of:
 
 ```text
 Makefile
@@ -108,34 +108,34 @@ scripts/checkpatch.pl
 
 A directory is considered a kernel root only when every marker exists.
 Discovery results, including misses, are cached by starting directory.
-`kemacs-clear-caches` invalidates that cache.
+`kmode-clear-caches` invalidates that cache.
 
 ### External process plumbing
 
-**Implemented in `kemacs-core.el`.**
+**Implemented in `kmode-core.el`.**
 
-`kemacs-start-command` constructs a shell-quoted command and starts it through
-`compilation-start`.  `kemacs-root-id` combines the root basename with the
+`kmode-start-command` constructs a shell-quoted command and starts it through
+`compilation-start`.  `kmode-root-id` combines the root basename with the
 first six hex digits of a hash of its absolute path; buffers are named
-`*kemacs:<root-id>:<profile>:<label>*`.  `kemacs-compilation-mode`:
+`*kmode:<root-id>:<profile>:<label>*`.  `kmode-compilation-mode`:
 
 - inherits Compilation mode;
 - binds `g` to `recompile`;
 - applies ANSI colors through a buffer-local compilation filter;
 - prepends a terse checkpatch location matcher to the buffer-local error
   regexp list; and
-- honors `kemacs-compilation-scroll-output`.
+- honors `kmode-compilation-scroll-output`.
 
-`kemacs-running-processes` filters Emacs's live process list by process
+`kmode-running-processes` filters Emacs's live process list by process
 ownership metadata or the root-ID/profile buffer prefix.  It returns only the
 active profile by default and every profile in the same worktree when its
-`all-profiles` argument is non-nil.  `kemacs-cancel-job` completion exposes the
+`all-profiles` argument is non-nil.  `kmode-cancel-job` completion exposes the
 worktree-wide view, rechecks liveness, and sends an interrupt.
 
 Callers may assign a canonical build-directory resource to a process.  A new
-resource-bearing job is rejected while another live Kemacs process owns that
+resource-bearing job is rejected while another live kmode-emacs process owns that
 directory, including when two profiles resolve to the same output.  This
-ownership also survives `kemacs-recompile`.  The process layer does not keep
+ownership also survives `kmode-recompile`.  The process layer does not keep
 finished-job history or distinguish a graceful cancellation protocol from an
 ordinary interrupt.
 
@@ -150,45 +150,45 @@ use Comint processes directly; vng build, preview, and dump operations use the
 shared Compilation path.  Both QEMU and vng guests hold the canonical profile
 output while live, and Emacs's GDB interface owns the debugger process.
 
-`kemacs-tool-path` resolves a bare executable name only through `exec-path`.
+`kmode-tool-path` resolves a bare executable name only through `exec-path`.
 In a kernel context it removes empty, relative, and source-tree-contained
 search entries before lookup, preventing an ambient `.` or checkout directory
 from shadowing host tools.  An absolute name or a name with a directory
 component is an explicit path; a relative explicit path is resolved against
 the kernel source root.  Explicit paths must be executable.
-`kemacs-require-tool` converts a miss into an actionable `user-error`.
+`kmode-require-tool` converts a miss into an actionable `user-error`.
 Consequently, checked-out helper scripts used directly by current modules must
 have their executable bit set.
 
-`kemacs-build-process-environment` also strips ambient Kbuild selectors and,
+`kmode-build-process-environment` also strips ambient Kbuild selectors and,
 when given a context, empty/relative/checkout-contained child `PATH` entries.
-`kemacs-build-trusted-path-directories` accepts absolute directories as an
+`kmode-build-trusted-path-directories` accepts absolute directories as an
 explicit escape hatch for trusted in-tree shims needed by Make, raw QEMU, or
-vng children; it does not change bare `kemacs-tool-path` lookup.  Dashboard
+vng children; it does not change bare `kmode-tool-path` lookup.  Dashboard
 Git probes, Doctor tool checks, and dmesg availability use the same
 checkout-safe executable lookup.
 
 ### Project mode and editing policy
 
-**Implemented in `kemacs-mode.el`.**
+**Implemented in `kmode-emacs.el`.**
 
 The top-level module loads every current feature module and defines the
-buffer-local `kemacs-mode`.  Enabling it first requires a recognized kernel
+buffer-local `kmode-mode`.  Enabling it first requires a recognized kernel
 root, adds the `C-c k` command map/menu (including `C-c k x` cancellation and
 `C-c k f` live-checkpatch toggling), dedicated `C-c k n` navigation and
 `C-c k v` virtme-ng maps, and a profile mode-line indicator.  By default it
 derives a buffer-local `compile-command` from the active profile.  It remaps
-the standard `compile` command to `kemacs-compile`, which preserves
+the standard `compile` command to `kmode-compile`, which preserves
 profile/process ownership for an edited command.  In
 `c-mode` it applies CC Mode's `linux` style with eight-column tabs; in
 `c-ts-mode` it applies the available eight-column indentation setting.  Values
 changed by the mode are saved and restored on disable.  The two behaviors can
-be disabled independently with `kemacs-apply-kernel-c-style` and
-`kemacs-set-compile-command`.
+be disabled independently with `kmode-apply-kernel-c-style` and
+`kmode-set-compile-command`.
 
-`kemacs-global-mode` is a globalized minor mode whose activation function
-enables the local mode only when `kemacs-root` succeeds.  The package also
-adds a project finder which returns a `(kemacs . ROOT)` project for recognized
+`kmode-global-mode` is a globalized minor mode whose activation function
+enables the local mode only when `kmode-root` succeeds.  The package also
+adds a project finder which returns a `(kmode . ROOT)` project for recognized
 trees, so Emacs Project commands use the kernel source root.  This finder and
 Kconfig's auto-mode association are global registrations; buffer styling,
 bindings, and compilation state remain local.
@@ -197,28 +197,28 @@ The two nested maps are implemented as follows:
 
 | Navigation key | Command | virtme-ng key | Command |
 | --- | --- | --- | --- |
-| `C-c k n .` | `kemacs-navigation-dwim` | `C-c k v b` | `kemacs-vng-build` |
-| `C-c k n d` | `kemacs-find-definition` | `C-c k v a` | `kemacs-vng-build-and-run` |
-| `C-c k n r` | `kemacs-find-callers` | `C-c k v A` | `kemacs-vng-build-and-debug` |
-| `C-c k n b` | `kemacs-navigation-back` | `C-c k v r` | `kemacs-vng-run` |
-| `C-c k n i` | `kemacs-follow-include` | `C-c k v e` | `kemacs-vng-run-command` |
-| `C-c k n k` | `kemacs-find-kbuild` | `C-c k v p` | `kemacs-vng-preview` |
-| `C-c k n c` | `kemacs-find-config` | `C-c k v d` | `kemacs-vng-debug` |
-| `C-c k n u` | `kemacs-grep-config-users` | `C-c k v g` | `kemacs-vng-gdb-attach` |
-| `C-c k n h` | `kemacs-toggle-header-source` | `C-c k v m` | `kemacs-vng-dump` |
-| `C-c k n D` | `kemacs-grep-documentation` | `C-c k v x` | `kemacs-vng-stop` |
-| `C-c k n e` | `kemacs-eglot-ensure` | `C-c k v s` | `kemacs-vng-show-commands` |
+| `C-c k n .` | `kmode-navigation-dwim` | `C-c k v b` | `kmode-vng-build` |
+| `C-c k n d` | `kmode-find-definition` | `C-c k v a` | `kmode-vng-build-and-run` |
+| `C-c k n r` | `kmode-find-callers` | `C-c k v A` | `kmode-vng-build-and-debug` |
+| `C-c k n b` | `kmode-navigation-back` | `C-c k v r` | `kmode-vng-run` |
+| `C-c k n i` | `kmode-follow-include` | `C-c k v e` | `kmode-vng-run-command` |
+| `C-c k n k` | `kmode-find-kbuild` | `C-c k v p` | `kmode-vng-preview` |
+| `C-c k n c` | `kmode-find-config` | `C-c k v d` | `kmode-vng-debug` |
+| `C-c k n u` | `kmode-grep-config-users` | `C-c k v g` | `kmode-vng-gdb-attach` |
+| `C-c k n h` | `kmode-toggle-header-source` | `C-c k v m` | `kmode-vng-dump` |
+| `C-c k n D` | `kmode-grep-documentation` | `C-c k v x` | `kmode-vng-stop` |
+| `C-c k n e` | `kmode-eglot-ensure` | `C-c k v s` | `kmode-vng-show-commands` |
 
 ### Dispatcher, dashboard, and doctor
 
-**Implemented in `kemacs-ui.el`.**
+**Implemented in `kmode-ui.el`.**
 
-`kemacs-dispatch` uses `completing-read` over the action registry.  Normally it
+`kmode-dispatch` uses `completing-read` over the action registry.  Normally it
 omits unavailable actions; a prefix argument includes them, but selection
 still rechecks the predicate and refuses invocation.  It has no Transient or
 third-party completion dependency.
 
-The read-only flight deck has one buffer per `kemacs-root-id` and remembers the
+The read-only flight deck has one buffer per `kmode-root-id` and remembers the
 origin buffer so action availability/invocation keeps its buffer context.  It
 shows source root, Git branch/dirty state, profile
 description, output tree, and readability/mtime for `.config`,
@@ -230,7 +230,7 @@ are buttons and unavailable actions are dimmed.  `g`, `p`, and `d` refresh,
 select a profile, and open doctor.  Artifact age is informational; the
 dashboard does not currently fingerprint or prove freshness.
 
-`kemacs-doctor` reports a fixed initial set of executable/tree-tool checks
+`kmode-doctor` reports a fixed initial set of executable/tree-tool checks
 (Make, Git, ripgrep, clangd, Sparse, Coccinelle, GDB, b4, checkpatch, and
 get_maintainer), the three profile artifacts above, vng/official-alias
 resolution, vng profile/root coherence, the `default_opts` trust state, and
@@ -241,9 +241,9 @@ vng discovery does issue its read-only `--version` probe.
 
 ### Kconfig editing
 
-**Implemented in `kemacs-kconfig.el`.**
+**Implemented in `kmode-kconfig.el`.**
 
-`kemacs-kconfig-mode` is automatically associated with `Kconfig` and
+`kmode-kconfig-mode` is automatically associated with `Kconfig` and
 `Kconfig.*`.  It supplies syntax/font lock, symbol/menu Imenu entries,
 eight-column block/property/help indentation, `M-.` Kconfig-symbol lookup, and
 `C-c C-o` source following.  Source following recognizes the
@@ -259,11 +259,11 @@ semantics.
 
 ### Action registry
 
-**Implemented in `kemacs-core.el` and consumed by `kemacs-ui.el`.**
+**Implemented in `kmode-core.el` and consumed by `kmode-ui.el`.**
 
 An action has an ID, title, group, interactive command, optional availability
 predicate, and optional description.  Registering an existing ID replaces it.
-`kemacs-actions` returns a group/title-sorted copy and normally removes actions
+`kmode-actions` returns a group/title-sorted copy and normally removes actions
 whose predicates fail.  Predicate errors are treated as unavailable rather
 than breaking the dispatcher or dashboard.
 
@@ -285,23 +285,23 @@ commands intentionally have no action entry yet.
 | `find-kbuild` | Navigate / Find owning Kbuild |
 | `docs` | Navigate / Search Documentation/ |
 | `eglot` | Navigate / Start profile-aware clangd |
-| `kemacs-build` | Build / Build kernel |
-| `kemacs-compile` | Build / Compile edited command... |
-| `kemacs-build-target` | Build / Build target... |
-| `kemacs-build-current-file` | Build / Build current object |
-| `kemacs-build-current-directory` | Build / Build current directory |
-| `kemacs-build-compile-commands` | Build / Generate compile database |
-| `kemacs-build-clean` | Build / Clean build output |
-| `kemacs-build-sparse` | Check / Run sparse |
-| `kemacs-analyze-warning-build` | Check / Build with extra warnings |
-| `kemacs-analyze-smatch` | Check / Run Smatch |
-| `kemacs-analyze-coccinelle` | Check / Run Coccinelle report |
-| `kemacs-analyze-clang` | Check / Run Clang analyzer |
-| `kemacs-analyze-checkstack` | Check / Run checkstack |
+| `kmode-build` | Build / Build kernel |
+| `kmode-compile` | Build / Compile edited command... |
+| `kmode-build-target` | Build / Build target... |
+| `kmode-build-current-file` | Build / Build current object |
+| `kmode-build-current-directory` | Build / Build current directory |
+| `kmode-build-compile-commands` | Build / Generate compile database |
+| `kmode-build-clean` | Build / Clean build output |
+| `kmode-build-sparse` | Check / Run sparse |
+| `kmode-analyze-warning-build` | Check / Build with extra warnings |
+| `kmode-analyze-smatch` | Check / Run Smatch |
+| `kmode-analyze-coccinelle` | Check / Run Coccinelle report |
+| `kmode-analyze-clang` | Check / Run Clang analyzer |
+| `kmode-analyze-checkstack` | Check / Run checkstack |
 | `checkpatch-flymake` | Check / Toggle live checkpatch |
-| `kemacs-build-defconfig` | Configure / Generate defconfig |
-| `kemacs-build-menuconfig` | Configure / Open menuconfig |
-| `kemacs-build-olddefconfig` | Configure / Run olddefconfig |
+| `kmode-build-defconfig` | Configure / Generate defconfig |
+| `kmode-build-menuconfig` | Configure / Open menuconfig |
+| `kmode-build-olddefconfig` | Configure / Run olddefconfig |
 | `checkpatch-file` | Review / Checkpatch current file |
 | `checkpatch-staged` | Review / Checkpatch staged diff |
 | `checkpatch-range` | Review / Checkpatch commit/range |
@@ -310,13 +310,13 @@ commands intentionally have no action entry yet.
 | `range-diff` | Review / Compare patch series |
 | `format-patch` | Review / Export patch series |
 | `submission-guide` | Review / Open submission guide |
-| `kemacs-impact-plan` | Review / Plan staged change impact |
-| `kemacs-kunit-run` | Test / Run KUnit |
-| `kemacs-kunit-run-filter` | Test / Run filtered KUnit... |
-| `kemacs-kunit-run-config` | Test / Run KUnit config... |
-| `kemacs-kunit-build` | Test / Build KUnit kernel |
-| `kemacs-kselftest-run` | Test / Run Kselftest subset... |
-| `kemacs-kselftest-run-current` | Test / Run current Kselftest collection |
+| `kmode-impact-plan` | Review / Plan staged change impact |
+| `kmode-kunit-run` | Test / Run KUnit |
+| `kmode-kunit-run-filter` | Test / Run filtered KUnit... |
+| `kmode-kunit-run-config` | Test / Run KUnit config... |
+| `kmode-kunit-build` | Test / Build KUnit kernel |
+| `kmode-kselftest-run` | Test / Run Kselftest subset... |
+| `kmode-kselftest-run-current` | Test / Run current Kselftest collection |
 | `decode-log` | Debug / Decode stacktrace buffer |
 | `dmesg` | Debug / Follow local dmesg |
 | `qemu` | Debug / Boot active QEMU profile |
@@ -338,17 +338,17 @@ The Eglot action predicate requires both an Eglot library and a discoverable
 
 ### Kernel-aware navigation
 
-**Implemented in `kemacs-navigate.el`.**
+**Implemented in `kmode-navigate.el`.**
 
-`kemacs-navigation-dwim` chooses an operation in this order:
+`kmode-navigation-dwim` chooses an operation in this order:
 
 1. follow an include found on the current line;
 2. find a Kconfig definition for a `CONFIG_FOO` symbol, or for a normalized
-   uppercase symbol when the buffer uses `kemacs-kconfig-mode`; if that fails,
+   uppercase symbol when the buffer uses `kmode-kconfig-mode`; if that fails,
    ask Xref for a definition;
 3. otherwise ask Xref for a definition.
 
-Kemacs does not replace Xref's standard navigation keys: `M-.` finds a
+kmode-emacs does not replace Xref's standard navigation keys: `M-.` finds a
 definition, `M-?` finds references/call sites, and `M-,` returns through Xref
 history.  `C-c k n d`, `C-c k n r`, and `C-c k n b` expose the same operations
 inside the dedicated kernel prefix.
@@ -366,26 +366,26 @@ it does not evaluate preprocessor include paths.
 Source/header toggling searches tracked/visible files reported by `rg --files`
 when possible and falls back to recursive source-file enumeration.  It matches
 basenames, not semantic declarations or Kbuild ownership, and truncates the
-candidate list to `kemacs-navigation-file-limit`.
+candidate list to `kmode-navigation-file-limit`.
 
-`kemacs-find-kbuild` walks ancestors inside the kernel tree and chooses the
+`kmode-find-kbuild` walks ancestors inside the kernel tree and chooses the
 first existing `Kbuild` or `Makefile`.  It finds the nearest build description;
 it does not prove that the current file is named by that file.
 
-`kemacs-eglot-ensure` requires a readable
+`kmode-eglot-ensure` requires a readable
 `<resolved-output>/compile_commands.json`, adds a buffer-local Eglot server
 entry for the current major mode, passes clangd the resolved
 `--compile-commands-dir`, and calls `eglot-ensure`.  It does not generate or
 validate the database, detect staleness, or manage Rust Analyzer.  By default,
-`kemacs-stop-eglot-on-profile-change` makes a profile selection collect and
+`kmode-stop-eglot-on-profile-change` makes a profile selection collect and
 shut down Eglot servers found in file buffers under that worktree; users must
-explicitly call `kemacs-eglot-ensure` to start clangd for the new profile.
+explicitly call `kmode-eglot-ensure` to start clangd for the new profile.
 
 ### Profile-aware Kbuild
 
-**Implemented in `kemacs-build.el`.**
+**Implemented in `kmode-build.el`.**
 
-`kemacs-build-make-arguments` is the central Kbuild argv constructor.  In
+`kmode-build-make-arguments` is the central Kbuild argv constructor.  In
 order, it adds a positive `-j`, `ARCH=`, `CROSS_COMPILE=`, `LLVM=1` for a
 `clang` profile, `O=` when output differs from the source root, trusted profile
 arguments, trusted per-call arguments, and validated goals.  Minibuffer Make
@@ -408,13 +408,13 @@ object file names by changing the extension to `.o`.  It does not inspect
 Kbuild membership, composite objects, generated files, or whether that target
 exists.  Directory mapping is likewise a relative-directory heuristic.
 
-`kemacs-compile` prompts from the synchronized `compile-command`, accepts an
+`kmode-compile` prompts from the synchronized `compile-command`, accepts an
 edited shell command, applies the sanitized environment, and runs it as an
 active-profile job owning the profile output.  It is the buffer-local remap
-target for the standard `compile` command while `kemacs-mode` is enabled; the
+target for the standard `compile` command while `kmode-mode` is enabled; the
 edited command remains trusted user input.
 
-Every noninteractive operation reuses `kemacs-start-command`, so it has an
+Every noninteractive operation reuses `kmode-start-command`, so it has an
 inspectable quoted command and a root/profile/label-specific output buffer.
 `menuconfig` instead runs under `term-mode`/character mode in a similarly
 named buffer.  Build and edited-command jobs mark their canonical output as a
@@ -425,24 +425,24 @@ warn that the compile-database target can perform a large build.
 
 ### Optional static analysis
 
-**Implemented in `kemacs-analyze.el`.**
+**Implemented in `kmode-analyze.el`.**
 
 All analysis commands reuse the profile-aware Kbuild argv and asynchronous
 Compilation output:
 
-- `kemacs-analyze-warning-build` adds validated `W=1`, `W=2`, or `W=3` to the
+- `kmode-analyze-warning-build` adds validated `W=1`, `W=2`, or `W=3` to the
   inferred current object or configured/default build;
-- `kemacs-analyze-smatch` requires the configured Smatch executable and adds
+- `kmode-analyze-smatch` requires the configured Smatch executable and adds
   validated `C=1`/`C=2` plus `CHECK=<program> -p=kernel`;
-- `kemacs-analyze-coccinelle-report` requires `spatch`, executable tree-local
+- `kmode-analyze-coccinelle-report` requires `spatch`, executable tree-local
   `scripts/coccicheck`, and a detected `coccicheck` target, and always invokes
   `MODE=report`; a prefix can add a root-contained current-directory `M=` and/or
   one readable `COCCI=` file (an outside-tree semantic patch is allowed after
   validation);
-- `kemacs-analyze-clang-analyzer` requires the kernel target/helper, Python,
+- `kmode-analyze-clang-analyzer` requires the kernel target/helper, Python,
   clang-tidy, and a `clang` profile or `.config` containing
   `CONFIG_CC_IS_CLANG=y`; and
-- `kemacs-analyze-checkstack` requires a readable profile `vmlinux`, the
+- `kmode-analyze-checkstack` requires a readable profile `vmlinux`, the
   kernel target/script, Perl, and the profile's GNU or LLVM objdump.
 
 Kbuild target discovery is a lightweight textual search of the top-level
@@ -454,11 +454,11 @@ a baseline, or add resource/time limits.
 
 ### Opt-in live checkpatch
 
-**Implemented in `kemacs-flymake.el`.**
+**Implemented in `kmode-flymake.el`.**
 
-`kemacs-checkpatch-flymake-mode` is a buffer-local, disabled-by-default
+`kmode-checkpatch-flymake-mode` is a buffer-local, disabled-by-default
 integration for C/header, assembly, and Rust source.  It appends
-`kemacs-checkpatch-flymake` to the local
+`kmode-checkpatch-flymake` to the local
 `flymake-diagnostic-functions`, preserving Eglot and other existing backends.
 If Flymake was off, it starts it and later stops only the Flymake instance it
 started; otherwise it preserves the user's Flymake state.
@@ -481,7 +481,7 @@ script; use it only with a trusted checkout.
 
 ### Patch checks and preparation
 
-**Implemented in `kemacs-review.el`.**
+**Implemented in `kmode-review.el`.**
 
 The module uses tools from the current source tree where appropriate:
 
@@ -506,10 +506,10 @@ test and a clean checkpatch result is not a correctness verdict.
 
 ### Heuristic change-impact plan
 
-**Implemented in `kemacs-impact.el`.**
+**Implemented in `kmode-impact.el`.**
 
-`kemacs-impact-plan` reads the staged index diff by default; with a prefix, or
-through `kemacs-impact-plan-range`, it accepts a validated Git revision/range.
+`kmode-impact-plan` reads the staged index diff by default; with a prefix, or
+through `kmode-impact-plan-range`, it accepts a validated Git revision/range.
 It calls `git diff --name-only -z` without a shell, so unusual path bytes remain
 path boundaries, and renders a read-only per-root report.  Control characters
 are escaped for display and deleted/unavailable paths remain visible.
@@ -521,7 +521,7 @@ kernel/DT/docs builds, `olddefconfig`/`menuconfig`, Sparse, KUnit filters,
 Kselftest collections, and staged/range checkpatch.  Each suggestion explains
 its rationale and is a `[run]` button; gathering/rendering runs none of them.
 Path-specific build suggestions are capped by
-`kemacs-impact-max-specific-builds` (24 by default).
+`kmode-impact-max-specific-builds` (24 by default).
 
 This is explicitly a filename/path heuristic.  It does not parse Kbuild
 conditions, compute header consumers, evaluate Kconfig, map maintainers, rank
@@ -533,7 +533,7 @@ and has no saved manifest or multi-profile executor.
 
 ### KUnit and Kselftest
 
-**Implemented in `kemacs-test.el`.**
+**Implemented in `kmode-test.el`.**
 
 KUnit commands call the checked-out tree's `tools/testing/kunit/kunit.py` with
 an explicitly discovered Python interpreter.  They forward profile
@@ -543,7 +543,7 @@ The default profile uses `<profile-output>/.kunit`; another profile uses a
 safe profile-name plus six-digit profile-hash suffix under its output.  Thus
 the derived directory never equals the ordinary profile output and cannot
 replace its `.config` or normal artifacts.  An absolute
-`kemacs-kunit-build-directory` override is used directly and a relative
+`kmode-kunit-build-directory` override is used directly and a relative
 override resolves from the source root.  Public operations run, run with a
 filter/config, configure only, or build only.  KUnit jobs serialize on their
 resolved KUnit build directory.
@@ -563,9 +563,9 @@ hardware.
 
 ### Logs, custom QEMU, and GDB
 
-**Implemented in `kemacs-debug.el`.**
+**Implemented in `kmode-debug.el`.**
 
-`kemacs-log-mode` derives from the Kemacs compilation mode, highlights common
+`kmode-log-mode` derives from the kmode-emacs compilation mode, highlights common
 incident/result terms, and binds `n`, `p`, and `d` to incident navigation and
 whole-buffer decoding.  Logs can be visited from a file or streamed from the
 configured local argv (by default `dmesg --follow --human --decode`).  Region
@@ -580,7 +580,7 @@ through `%i` or `%v`.  Each argv token expands `%i`, `%v`, `%o`, `%r`, and
 process for that root/profile is rejected.  Stop sends an interrupt to that
 process.  No shell evaluates the QEMU argv.  The live process owns the
 canonical profile output, so it cannot overlap a managed build or vng guest
-using the same artifacts.  Kemacs recognizes `-s` and explicit `-gdb`/`-qmp`
+using the same artifacts.  kmode-emacs recognizes `-s` and explicit `-gdb`/`-qmp`
 TCP or Unix endpoints and owns canonical named resources while QEMU is live.
 TCP identity is the port, regardless of bind-address spelling.  Relative Unix
 socket paths are resolved from the kernel source root.
@@ -598,13 +598,13 @@ The local log command is not automatically privileged.
 
 ### First-class virtme-ng integration
 
-**Implemented in `kemacs-virtme.el`, with context fields in `kemacs-core.el`,
-bindings/menu in `kemacs-mode.el`, and status checks in `kemacs-ui.el`.**
+**Implemented in `kmode-virtme.el`, with context fields in `kmode-core.el`,
+bindings/menu in `kmode-emacs.el`, and status checks in `kmode-ui.el`.**
 
-Kemacs targets virtme-ng's public `vng` frontend.  `kemacs-vng-program`
+kmode-emacs targets virtme-ng's public `vng` frontend.  `kmode-vng-program`
 defaults to `vng`; while unchanged, executable discovery falls back to the
 official `virtme-ng` alias.  It does not probe `vng-ng` or call the deprecated
-underlying `virtme-*` commands.  Bare programs follow `kemacs-tool-path`'s
+underlying `virtme-*` commands.  Bare programs follow `kmode-tool-path`'s
 `exec-path` rule, while an explicitly configured path follows its normal
 absolute/source-root-relative executable checks.
 
@@ -624,13 +624,13 @@ Architecture inference is deliberately conservative.  `x86`, `arm`,
 `powerpc`, and `riscv` are ambiguous unless they exactly describe the native
 host without a cross compiler.  Unambiguous kernel names map directly; known
 cross-compiler prefixes can infer a vng architecture; and `:vng-arch` resolves
-the remaining cases.  Kemacs rejects contradictions among the kernel,
+the remaining cases.  kmode-emacs rejects contradictions among the kernel,
 cross-compiler, and explicit vng values.  A pure cross build needs no guest
 root and does not pass `--root`; run/debug/preview/exec require an existing
 root whenever the resolved architecture is non-native.  A chained build/boot
 preflights that runtime requirement before compiling.
 
-The pure `kemacs-vng-command-arguments` builder supports `build`, `run`,
+The pure `kmode-vng-command-arguments` builder supports `build`, `run`,
 `debug`, `preview`, and `exec`.  Builds execute from the source root as:
 
 ```text
@@ -647,9 +647,9 @@ Kbuild environment is sanitized for all managed vng processes, and build/run
 chains retain a copied context even if the worktree selection changes while
 the build is running.
 
-Direct Emacs argv removes an extra Kemacs-owned host shell from interactive
+Direct Emacs argv removes an extra kmode-emacs-owned host shell from interactive
 launches, but current vng itself reconstructs parts of its runtime through a
-shell.  Kemacs therefore restricts runtime output/root paths and common/debug
+shell.  kmode-emacs therefore restricts runtime output/root paths and common/debug
 argument tokens to a conservative shell-atom alphabet.  This is an upstream
 compatibility guard, not a claim that arbitrary profile values are safe.
 
@@ -670,7 +670,7 @@ ranges fail closed.  Build scope allows only `--skip-modules`, `--config`,
 --ssh-client  --ssh-tcp  --remote-cmd  --systemd
 ```
 
-Kemacs retains ownership of operation, output, architecture, root, cross
+kmode-emacs retains ownership of operation, output, architecture, root, cross
 compiler, jobs, guest command, append values, dry-run/debug, help/version,
 destructive Git/remote-build actions, and the `--` boundary.  Make-side
 `O=`/`KBUILD_OUTPUT=`/`ARCH=`/`CROSS_COMPILE=`/`LLVM=` overrides are likewise
@@ -678,8 +678,8 @@ rejected.  `--debug` exists only as a typed configuration default because the
 interactive debug operation owns the explicit selector.  These checks protect
 context ownership; they do not make allowed trusted options harmless.
 
-`kemacs-vng-home-directory` selects one existing stable home directory
-(default: the user's home).  Kemacs pins managed vng `HOME` to it and inspects
+`kmode-vng-home-directory` selects one existing stable home directory
+(default: the user's home).  kmode-emacs pins managed vng `HOME` to it and inspects
 the same upstream precedence used by the child: first
 `<home>/.config/virtme-ng/virtme-ng.conf`, then
 `<home>/.virtme-ng.conf`, then `/etc/virtme-ng.conf`.  This applies to version
@@ -687,19 +687,19 @@ probing, build, preview, runtime, and dump operations and prevents ambient HOME
 changes from selecting a different config after inspection.
 
 Invalid or unreadable JSON fails closed.  A nonempty `default_opts` object is
-also rejected until `kemacs-vng-trust-default-options` is non-nil, because
+also rejected until `kmode-vng-trust-default-options` is non-nil, because
 upstream applies it after explicit arguments.  Trust does not disable
 validation: each argparse destination must be unique, present in the option
-schema (plus the default-only `debug` destination), and not one of Kemacs's
+schema (plus the default-only `debug` destination), and not one of kmode-emacs's
 managed destinations.  Values must match their boolean flag, nonnegative
 count, string/optional/list, or 1--65535 port type; runtime strings also obey
 the upstream-shell atom restriction.  Unknown destinations, managed
 overrides, bad shapes/ranges, and unsafe values therefore remain hard errors.
-Kemacs computes effective dangerous/global/debug behavior from the validated
+kmode-emacs computes effective dangerous/global/debug behavior from the validated
 defaults, including a configured `debug: false`, instead of treating every
 trusted configuration as globally locking.
 
-At runtime Kemacs rejects a configured root that does not already exist with
+At runtime kmode-emacs rejects a configured root that does not already exist with
 read/search access, and rejects a non-native vng architecture without such a
 root.  This prevents an ordinary managed boot from entering upstream's
 missing-root download/extraction path, which can use the network and `sudo`.
@@ -707,15 +707,15 @@ The build operation intentionally omits and does not validate the root, so a
 cross build remains available without provisioning a guest.  A separate
 confirmed provisioning command is not implemented.
 
-With `kemacs-vng-confirm-host-access` enabled (the default), explicit profile
+With `kmode-vng-confirm-host-access` enabled (the default), explicit profile
 or enabled validated-default selections for writable host access, a custom
 QEMU/extra QEMU options, disk/device passthrough, networking, empty passwords,
 SSH/console services or clients, or systemd receive a `yes-or-no-p`
 confirmation.  This is an attention gate, not isolation; trusted arguments
 and defaults run with the user's authority.
 
-`kemacs-vng-build`, `kemacs-vng-preview`, and every live vng guest own the
-canonical profile output.  This serializes them with Kemacs builds, custom
+`kmode-vng-build`, `kmode-vng-preview`, and every live vng guest own the
+canonical profile output.  This serializes them with kmode-emacs builds, custom
 QEMU, and aliases/profiles resolving to the same directory.  Only one vng
 guest may run for a root/profile.  Debug, pin, SSH, and console arguments use
 an additional process-global vng lock when enabled explicitly or by a
@@ -734,10 +734,10 @@ Compilation path, where each already-separated item is shell-quoted once.
 All managed vng children receive the sanitized Kbuild environment, a
 checkout-isolated child `PATH`, and the pinned vng `HOME`; trusted absolute
 checkout `PATH` directories require the explicit
-`kemacs-build-trusted-path-directories` escape hatch.
-`kemacs-vng-stop` selects a live vng guest across the current worktree's
+`kmode-build-trusted-path-directories` escape hatch.
+`kmode-vng-stop` selects a live vng guest across the current worktree's
 profiles and sends an interrupt.  Dashboard status uses the same process
-metadata, and the generic `kemacs-cancel-job` also sees these jobs.
+metadata, and the generic `kmode-cancel-job` also sees these jobs.
 Stop, attach, and dashboard discovery never adopt a guest from another kernel
 root; the process-global facility lock deliberately spans roots because its
 host ports/services are actually shared.
@@ -756,20 +756,20 @@ the frozen plan.  The automatic launch does not select or pop to its buffer;
 it reports the buffer name in a message, so completion cannot steal focus.
 
 Debug attachment does not launch upstream's terminal-oriented `vng --gdb`.
-`kemacs-vng-gdb-attach` finds the worktree's managed debug guest, retrieves its
+`kmode-vng-gdb-attach` finds the worktree's managed debug guest, retrieves its
 pinned context, requires its readable `vmlinux`, and calls the built-in Emacs
-GDB/MI adapter with `kemacs-vng-gdb-target` (default
-`localhost:1234`).  `kemacs-vng-dump` similarly requires a managed debug
+GDB/MI adapter with `kmode-vng-gdb-target` (default
+`localhost:1234`).  `kmode-vng-dump` similarly requires a managed debug
 guest, checks the destination directory, confirms replacement, and launches
 `vng --dump FILE`.  Neither command waits for endpoint readiness or verifies
 the running kernel's build identity.
 
-`kemacs-vng-preview` asks upstream `--dry-run` to resolve/show the VM command
+`kmode-vng-preview` asks upstream `--dry-run` to resolve/show the VM command
 without launching QEMU.  It still takes the output resource because upstream
 initialization can prepare `.virtme_mods`; it is deliberately not described as
-filesystem-side-effect-free.  `kemacs-vng-show-commands` displays shell-quoted
+filesystem-side-effect-free.  `kmode-vng-show-commands` displays shell-quoted
 build/run/preview/debug forms without executing them.  The forms show
-Kemacs-generated argv; validated trusted defaults remain in the selected
+kmode-emacs-generated argv; validated trusted defaults remain in the selected
 fixed-HOME config and are applied by upstream, so displayed argv alone is not
 an effective-option dump.
 
@@ -782,43 +782,43 @@ integration smoke tests rather than claims made by the hermetic suite.
 
 ### Refine a context
 
-Functions in `kemacs-context-functions` receive a resolved context.  They may
+Functions in `kmode-context-functions` receive a resolved context.  They may
 mutate and return it, return a replacement, or return nil to keep the object
 passed to them.
 
 ```elisp
-(defun my-kemacs-ci-output (context)
-  (when (string= (kemacs-context-profile context) "ci")
-    (setf (kemacs-context-jobs context) 4))
+(defun my-kmode-ci-output (context)
+  (when (string= (kmode-context-profile context) "ci")
+    (setf (kmode-context-jobs context) 4))
   context)
 
-(add-hook 'kemacs-context-functions #'my-kemacs-ci-output)
+(add-hook 'kmode-context-functions #'my-kmode-ci-output)
 ```
 
 Hooks run last, after buffer and profile resolution.  Hook code must not start
 processes or prompt: context resolution is used by action availability checks
 and dashboard refreshes.  Code that needs to react after an interactive
-worktree profile selection should use `kemacs-profile-changed-hook` instead;
+worktree profile selection should use `kmode-profile-changed-hook` instead;
 the hook receives no arguments and runs with the selecting buffer current.
 
 ### Register an action
 
 ```elisp
-(defun my-kemacs-smoke-test ()
+(defun my-kmode-smoke-test ()
   (interactive)
-  (let ((context (kemacs-resolve-context)))
-    (kemacs-start-command
+  (let ((context (kmode-resolve-context)))
+    (kmode-start-command
      "smoke"
      "make"
-     (append (list "-C" (kemacs-context-root context))
-             (when-let ((output (kemacs-context-output context)))
+     (append (list "-C" (kmode-context-root context))
+             (when-let ((output (kmode-context-output context)))
                (list (concat "O=" output)))
              '("kselftest"))
-     (kemacs-context-root context))))
+     (kmode-context-root context))))
 
-(kemacs-register-action
- 'my-smoke "Run smoke test" "Test" #'my-kemacs-smoke-test
- :predicate (lambda () (kemacs-tool-path "make"))
+(kmode-register-action
+ 'my-smoke "Run smoke test" "Test" #'my-kmode-smoke-test
+ :predicate (lambda () (kmode-tool-path "make"))
  :description "Run my project-specific smoke target")
 ```
 
@@ -829,15 +829,15 @@ not an authorization or safety boundary.
 ### Reuse the Kbuild argv constructor
 
 Extensions that invoke the top-level kernel Makefile should prefer
-`kemacs-build-make-arguments` to reconstructing profile options:
+`kmode-build-make-arguments` to reconstructing profile options:
 
 ```elisp
-(let* ((context (kemacs-resolve-context))
-       (make (kemacs-require-tool kemacs-build-make-program context))
-       (argv (kemacs-build-make-arguments
+(let* ((context (kmode-resolve-context))
+       (make (kmode-require-tool kmode-build-make-program context))
+       (argv (kmode-build-make-arguments
               context '("drivers/base/") '("W=1"))))
-  (kemacs-start-command "my-check" make argv
-                        (kemacs-context-root context)))
+  (kmode-start-command "my-check" make argv
+                        (kmode-context-root context)))
 ```
 
 The target list passes the strict target validator.  The extra-argument list
@@ -851,46 +851,46 @@ tree:
 
 | Function | Contract summary |
 | --- | --- |
-| `kemacs-kernel-root-p` | Test all configured root markers |
-| `kemacs-locate-root` | Locate/cached lookup; nil outside a tree |
-| `kemacs-root` | Return the root or signal `user-error`; optional no-error form |
-| `kemacs-current-profile-name` | Resolve buffer/session/default profile name |
-| `kemacs-profile-property` | Read a property from a selected profile |
-| `kemacs-resolve-context` | Produce a context and run refinement hooks |
-| `kemacs-profile-changed-hook` | Notify consumers after worktree profile selection |
-| `kemacs-profile-description` | Produce compact profile text for a UI |
-| `kemacs-native-arch` / `kemacs-srcarch` | Infer host ARCH and map it to the kernel source-directory spelling |
-| `kemacs-root-id` | Produce a collision-resistant root display/process identifier |
-| `kemacs-running-processes` | Return live processes for the active profile or, optionally, every profile in the worktree |
-| `kemacs-cancel-job` | Interrupt a validated live Kemacs process in the current worktree |
-| `kemacs-process-resource-key` / `kemacs-resource-process` | Canonicalize and inspect writable-resource ownership |
-| `kemacs-assert-resource-available` / `kemacs-mark-process-resource` | Reject or record overlapping resource use |
-| `kemacs-register-action` | Add or replace an action |
-| `kemacs-action-available-p` | Safely evaluate an action predicate |
-| `kemacs-actions` | Return sorted available/all actions |
-| `kemacs-tool-path` | Resolve a bare `exec-path` command or an explicit absolute/tree-relative executable |
-| `kemacs-require-tool` | Resolve or signal an actionable error |
-| `kemacs-shell-command` | Shell-quote a program and argument list |
-| `kemacs-start-shell-command` | Start a visible shell command with optional resource ownership |
-| `kemacs-start-command` | Start an asynchronous Compilation-mode process |
-| `kemacs-recompile` | Restart a Kemacs Compilation job after revalidating its resource |
-| `kemacs-file-in-root` | Return a source-root-relative file or reject it |
-| `kemacs-build-process-environment` | Copy the environment without ambient Kbuild selectors |
-| `kemacs-build-make-arguments` | Construct and validate a complete profile-aware Make argv |
-| `kemacs-compile` | Run an edited command as a serialized, profile-owned job |
-| `kemacs-vng-command-arguments` | Construct validated vng argv for a supported operation |
-| `kemacs-vng-command` | Render that argv as shell-quoted display/copy text |
-| `kemacs-vng-profile-problem` / `kemacs-vng-available-p` | Explain or test current vng capability without starting it |
-| `kemacs-vng-config-file` / `kemacs-vng-default-options` | Inspect the selected upstream config and its overriding defaults |
-| `kemacs-vng-processes` | Return managed vng guests for the active profile or whole worktree |
+| `kmode-kernel-root-p` | Test all configured root markers |
+| `kmode-locate-root` | Locate/cached lookup; nil outside a tree |
+| `kmode-root` | Return the root or signal `user-error`; optional no-error form |
+| `kmode-current-profile-name` | Resolve buffer/session/default profile name |
+| `kmode-profile-property` | Read a property from a selected profile |
+| `kmode-resolve-context` | Produce a context and run refinement hooks |
+| `kmode-profile-changed-hook` | Notify consumers after worktree profile selection |
+| `kmode-profile-description` | Produce compact profile text for a UI |
+| `kmode-native-arch` / `kmode-srcarch` | Infer host ARCH and map it to the kernel source-directory spelling |
+| `kmode-root-id` | Produce a collision-resistant root display/process identifier |
+| `kmode-running-processes` | Return live processes for the active profile or, optionally, every profile in the worktree |
+| `kmode-cancel-job` | Interrupt a validated live kmode-emacs process in the current worktree |
+| `kmode-process-resource-key` / `kmode-resource-process` | Canonicalize and inspect writable-resource ownership |
+| `kmode-assert-resource-available` / `kmode-mark-process-resource` | Reject or record overlapping resource use |
+| `kmode-register-action` | Add or replace an action |
+| `kmode-action-available-p` | Safely evaluate an action predicate |
+| `kmode-actions` | Return sorted available/all actions |
+| `kmode-tool-path` | Resolve a bare `exec-path` command or an explicit absolute/tree-relative executable |
+| `kmode-require-tool` | Resolve or signal an actionable error |
+| `kmode-shell-command` | Shell-quote a program and argument list |
+| `kmode-start-shell-command` | Start a visible shell command with optional resource ownership |
+| `kmode-start-command` | Start an asynchronous Compilation-mode process |
+| `kmode-recompile` | Restart a kmode-emacs Compilation job after revalidating its resource |
+| `kmode-file-in-root` | Return a source-root-relative file or reject it |
+| `kmode-build-process-environment` | Copy the environment without ambient Kbuild selectors |
+| `kmode-build-make-arguments` | Construct and validate a complete profile-aware Make argv |
+| `kmode-compile` | Run an edited command as a serialized, profile-owned job |
+| `kmode-vng-command-arguments` | Construct validated vng argv for a supported operation |
+| `kmode-vng-command` | Render that argv as shell-quoted display/copy text |
+| `kmode-vng-profile-problem` / `kmode-vng-available-p` | Explain or test current vng capability without starting it |
+| `kmode-vng-config-file` / `kmode-vng-default-options` | Inspect the selected upstream config and its overriding defaults |
+| `kmode-vng-processes` | Return managed vng guests for the active profile or whole worktree |
 
-Consumers should prefer accessors such as `kemacs-context-output` over relying
+Consumers should prefer accessors such as `kmode-context-output` over relying
 on the printed representation of the struct.
 
 ## Upstream facts that constrain the design
 
 This section states facts supported by upstream documentation.  The following
-roadmap section states Kemacs recommendations.
+roadmap section states kmode-emacs recommendations.
 
 ### Kbuild and compile databases
 
@@ -1061,7 +1061,7 @@ Acceptance criteria:
 prompted-target, current-object, current-directory, configuration,
 compile-database, Sparse, and clean commands.  Compilation buffers support
 resource-aware `recompile`; enabling the minor mode sets `compile-command` and
-remaps standard compilation to the sanitized, profile-owned `kemacs-compile`.
+remaps standard compilation to the sanitized, profile-owned `kmode-compile`.
 Managed jobs targeting the same canonical output directory cannot overlap.
 
 **Planned:** add explicit module/image/full-kernel choices, durable job
@@ -1084,9 +1084,9 @@ diagnostics without replacing Compilation mode's standard matchers.
 
 ### 3. Compilation database and semantic lifecycle (P0)
 
-**Implemented baseline:** `kemacs-build-compile-commands` explicitly invokes
+**Implemented baseline:** `kmode-build-compile-commands` explicitly invokes
 the current Kbuild `compile_commands.json` target with the complete active
-profile, and `kemacs-eglot-ensure` points clangd at the resulting output
+profile, and `kmode-eglot-ensure` points clangd at the resulting output
 directory after checking that the file is readable.
 
 **Planned:** feature-detect a compatible in-tree generator for older kernels,
@@ -1095,7 +1095,7 @@ warn before a request that can trigger a large build, and validate the result.
 Record a fingerprint covering at least source root/revision, output tree,
 `.config`, architecture, compiler/toolchain, and Make arguments.  Report
 missing, partial, stale, and current states separately.  Update generated files
-atomically where Kemacs owns them.
+atomically where kmode-emacs owns them.
 
 The implemented Eglot contact is buffer-local, and profile selection shuts
 down discovered servers for the worktree by default without automatically
@@ -1201,14 +1201,14 @@ Contributor flow:
 5. optionally reflect/preview; and
 6. send only after a separate explicit confirmation.
 
-Kemacs must never invent or automatically add `Reviewed-by`, `Acked-by`, or
+kmode-emacs must never invent or automatically add `Reviewed-by`, `Acked-by`, or
 `Tested-by`.  Incoming trailers should use b4's interactive review when there
 is ambiguity.
 
 Optional Magit integration may expose series worktrees and diff hunks; optional
 Notmuch/Gnus integration may supply Message-IDs.  Neither should be a hard
 dependency.  Notmuch's own documentation warns that its Emacs frontend and CLI
-versions must agree, so Kemacs should use public frontend functions and report
+versions must agree, so kmode-emacs should use public frontend functions and report
 version failures rather than vendoring the client.
 
 ### 7. Kernel log and crash-to-source loop (P1)
@@ -1245,7 +1245,7 @@ preview and confirmation.
 ### 8. QEMU, virtme-ng, and GDB cockpit (P1)
 
 **Implemented baseline:** for custom QEMU, a user supplies a profile QEMU argv,
-image, `vmlinux`, and GDB target.  Kemacs expands five profile placeholders,
+image, `vmlinux`, and GDB target.  kmode-emacs expands five profile placeholders,
 starts one QEMU Comint process per root/profile, can interrupt it, and launches
 built-in Emacs GDB with `target remote`.  First-class virtme-ng support also
 builds into or boots the active output, runs guest commands, previews the
@@ -1328,7 +1328,7 @@ working-tree changes; prefer a dedicated worktree.
 
 Add ftrace presets and function-at-point filters after log streaming and
 privileged-action confirmation are mature.  Capture the exact tracefs state
-changed by Kemacs and offer a scoped restore operation.
+changed by kmode-emacs and offer a scoped restore operation.
 
 ## Capability degradation
 
@@ -1380,10 +1380,10 @@ guests own their canonical output; enabled debug/pin/SSH/console facilities
 take a process-global lock, and effective debug/console/SSH ports take named
 TCP resources that also collide with recognized raw-QEMU endpoints.  Chained
 build/boot freezes a preflighted context/config/HOME/environment/argv/resource
-plan and revalidates it before a no-focus-steal launch.  Kemacs itself never
+plan and revalidates it before a no-focus-steal launch.  kmode-emacs itself never
 invokes `sudo` or installs a tool; a trusted external recipe or validated
 trusted upstream default can still do so.  These guards do not make trusted profile arguments, an edited
-`kemacs-compile` shell command, tree-local scripts, kernel tests, or a custom
+`kmode-compile` shell command, tree-local scripts, kernel tests, or a custom
 QEMU/vng recipe harmless.  A vng preview means no final QEMU launch, not a
 filesystem-side-effect-free operation.  The one guest-command string is passed
 as one host argv element but is intentionally interpreted by the guest shell.
@@ -1414,7 +1414,7 @@ features that do not exist yet:
    variables, and navigation backends are buffer/project local.
 9. **No unbounded background surprise.** Full-tree indexing, compile-database
    builds, analysis, and tests are explicit, cancellable jobs.
-10. **No automatic credential management.** Kemacs delegates Git, SMTP/b4,
+10. **No automatic credential management.** kmode-emacs delegates Git, SMTP/b4,
     SSH, and privilege authentication to their normal tools.
 
 ## Performance and compatibility hazards
@@ -1433,11 +1433,11 @@ features that do not exist yet:
 - b4 review keys, files, CLI output, and database are alpha.  Depend only on
   documented commands and isolate parsing by detected b4 version.
 - QEMU Unix socket paths have host length limits; runtime paths must be short.
-- Current public vng debug/QMP endpoints are fixed host ports.  Kemacs
+- Current public vng debug/QMP endpoints are fixed host ports.  kmode-emacs
   serializes global vng facilities and gives effective debug/console/SSH ports
   names shared with managed raw-QEMU endpoint locks, but an unmanaged process
   or another Emacs instance can still collide with them.
-- Trusted vng `default_opts` are typed and allowlisted by Kemacs but remain
+- Trusted vng `default_opts` are typed and allowlisted by kmode-emacs but remain
   upstream configuration applied after CLI parsing.  A config change therefore
   invalidates a frozen launch plan, and an unsupported future destination
   fails closed until classified.  vng preview may also prepare output-tree

@@ -1,8 +1,8 @@
-;;; kemacs-kconfig.el --- Major mode for Linux Kconfig files -*- lexical-binding: t; -*-
+;;; kmode-kconfig.el --- Major mode for Linux Kconfig files -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
 
-;; Author: Kemacs contributors
+;; Author: kmode-emacs contributors
 ;; Keywords: languages, c, linux
 ;; Package-Requires: ((emacs "28.1"))
 
@@ -13,16 +13,16 @@
 
 ;;; Code:
 
-(require 'kemacs-core)
-(require 'kemacs-navigate)
+(require 'kmode-core)
+(require 'kmode-navigate)
 (require 'subr-x)
 
-(defcustom kemacs-kconfig-indent-width 8
+(defcustom kmode-kconfig-indent-width 8
   "Indentation width for Kconfig properties and help text."
   :type 'integer
-  :group 'kemacs)
+  :group 'kmode)
 
-(defvar kemacs-kconfig-mode-syntax-table
+(defvar kmode-kconfig-mode-syntax-table
   (let ((table (make-syntax-table)))
     (modify-syntax-entry ?# "<" table)
     (modify-syntax-entry ?\n ">" table)
@@ -30,13 +30,13 @@
     table)
   "Syntax table for Kconfig files.")
 
-(defconst kemacs-kconfig--property-keywords
+(defconst kmode-kconfig--property-keywords
   '("bool" "tristate" "string" "hex" "int" "prompt" "default"
     "def_bool" "def_tristate" "depends on" "select" "imply" "range"
     "visible if" "option" "optional" "help")
   "Kconfig keywords describing a symbol or choice.")
 
-(defvar kemacs-kconfig-font-lock-keywords
+(defvar kmode-kconfig-font-lock-keywords
   (list
    '("^[ \t]*\\(config\\|menuconfig\\)[ \t]+\\([A-Z0-9_]+\\)"
      (1 font-lock-keyword-face) (2 font-lock-function-name-face))
@@ -51,7 +51,7 @@
     'font-lock-keyword-face)
    (cons
     (concat "^[ \t]*\\("
-            (regexp-opt kemacs-kconfig--property-keywords)
+            (regexp-opt kmode-kconfig--property-keywords)
             "\\)\\_>")
     'font-lock-builtin-face)
    '("\\_<\\(y\\|m\\|n\\)\\_>" . font-lock-constant-face)
@@ -59,12 +59,12 @@
    '("\\$(\\([A-Za-z0-9_]+\\))" (1 font-lock-variable-name-face)))
   "Font-lock rules for Kconfig files.")
 
-(defvar kemacs-kconfig-imenu-generic-expression
+(defvar kmode-kconfig-imenu-generic-expression
   '(("Symbols" "^[ \t]*\\(?:menuconfig\\|config\\)[ \t]+\\([A-Z0-9_]+\\)" 1)
     ("Menus" "^[ \t]*menu[ \t]+\"\\([^\"]+\\)\"" 1))
-  "Imenu expression used in Kemacs Kconfig mode.")
+  "Imenu expression used in kmode-emacs Kconfig mode.")
 
-(defun kemacs-kconfig--line-kind ()
+(defun kmode-kconfig--line-kind ()
   "Classify the current Kconfig line."
   (back-to-indentation)
   (cond
@@ -72,7 +72,7 @@
    ((looking-at "\\(?:if\\|menu\\|choice\\)\\_>") 'open)
    ((looking-at "\\(?:config\\|menuconfig\\)\\_>") 'symbol)
    ((looking-at
-     (concat "\\(?:" (regexp-opt kemacs-kconfig--property-keywords)
+     (concat "\\(?:" (regexp-opt kmode-kconfig--property-keywords)
              "\\)\\_>"))
     'property)
    ((looking-at
@@ -81,7 +81,7 @@
    ((looking-at "#\\|$") 'empty)
    (t 'body)))
 
-(defun kemacs-kconfig--indent-state ()
+(defun kmode-kconfig--indent-state ()
   "Return indentation state immediately before the current line.
 
 The result is a list of block depth, whether a symbol is active, and
@@ -93,7 +93,7 @@ whether the scanner is inside a help paragraph."
     (save-excursion
       (goto-char (point-min))
       (while (< (point) limit)
-        (pcase (kemacs-kconfig--line-kind)
+        (pcase (kmode-kconfig--line-kind)
           ('close
            (setq depth (max 0 (1- depth))
                  symbol-active nil
@@ -114,14 +114,14 @@ whether the scanner is inside a help paragraph."
         (forward-line 1)))
     (list depth symbol-active help-active)))
 
-(defun kemacs-kconfig-calculate-indent ()
+(defun kmode-kconfig-calculate-indent ()
   "Return the appropriate indentation column for the current line."
-  (let* ((state (kemacs-kconfig--indent-state))
+  (let* ((state (kmode-kconfig--indent-state))
          (depth (nth 0 state))
          (symbol-active (nth 1 state))
          (help-active (nth 2 state))
-         (kind (save-excursion (kemacs-kconfig--line-kind))))
-    (* kemacs-kconfig-indent-width
+         (kind (save-excursion (kmode-kconfig--line-kind))))
+    (* kmode-kconfig-indent-width
        (pcase kind
          ('close (max 0 (1- depth)))
          ((or 'open 'symbol 'top) depth)
@@ -129,16 +129,16 @@ whether the scanner is inside a help paragraph."
          ('body (+ depth (if help-active 2 (if symbol-active 1 0))))
          (_ 0)))))
 
-(defun kemacs-kconfig-indent-line ()
+(defun kmode-kconfig-indent-line ()
   "Indent the current Kconfig line while preserving point."
   (interactive)
   (let ((offset (- (current-column) (current-indentation)))
-        (indent (kemacs-kconfig-calculate-indent)))
+        (indent (kmode-kconfig-calculate-indent)))
     (indent-line-to indent)
     (when (> offset 0)
       (move-to-column (+ indent offset)))))
 
-(defun kemacs-kconfig--source-statement-at-point ()
+(defun kmode-kconfig--source-statement-at-point ()
   "Return the Kconfig source directive and path at point, or nil."
   (save-excursion
     (beginning-of-line)
@@ -150,11 +150,11 @@ whether the scanner is inside a help paragraph."
             (or (match-string-no-properties 2)
                 (match-string-no-properties 3))))))
 
-(defun kemacs-kconfig--source-at-point ()
+(defun kmode-kconfig--source-at-point ()
   "Return the Kconfig source path on the current line, or nil."
-  (cdr (kemacs-kconfig--source-statement-at-point)))
+  (cdr (kmode-kconfig--source-statement-at-point)))
 
-(defun kemacs-kconfig--expand-source-variable (path name value)
+(defun kmode-kconfig--expand-source-variable (path name value)
   "Expand Kconfig variable NAME to VALUE in PATH."
   (dolist (token (list (format "$(%s)" name)
                        (format "${%s}" name)
@@ -162,14 +162,14 @@ whether the scanner is inside a help paragraph."
                  path)
     (setq path (string-replace token value path))))
 
-(defun kemacs-kconfig--expand-source-path (source context)
+(defun kmode-kconfig--expand-source-path (source context)
   "Expand supported Kconfig variables in SOURCE for CONTEXT."
-  (let* ((arch (or (kemacs-context-arch context) (kemacs-native-arch)))
-         (srcarch (kemacs-srcarch arch))
-         (expanded (kemacs-kconfig--expand-source-variable
+  (let* ((arch (or (kmode-context-arch context) (kmode-native-arch)))
+         (srcarch (kmode-srcarch arch))
+         (expanded (kmode-kconfig--expand-source-variable
                     source "SRCARCH" srcarch)))
     (setq expanded
-          (kemacs-kconfig--expand-source-variable expanded "ARCH" arch))
+          (kmode-kconfig--expand-source-variable expanded "ARCH" arch))
     (dolist (prefix '("$srctree/" "$(srctree)/" "${srctree}/"))
       (when (string-prefix-p prefix expanded)
         (setq expanded (string-remove-prefix prefix expanded))))
@@ -178,17 +178,17 @@ whether the scanner is inside a help paragraph."
     expanded))
 
 ;;;###autoload
-(defun kemacs-kconfig-follow-source ()
+(defun kmode-kconfig-follow-source ()
   "Visit the Kconfig file named by the source statement at point."
   (interactive)
   (let* ((statement
-          (or (kemacs-kconfig--source-statement-at-point)
+          (or (kmode-kconfig--source-statement-at-point)
               (user-error "Point is not on a Kconfig source statement")))
          (directive (car statement))
          (source (cdr statement))
-         (context (kemacs-resolve-context))
-         (root (kemacs-context-root context))
-         (expanded (kemacs-kconfig--expand-source-path source context))
+         (context (kmode-resolve-context))
+         (root (kmode-context-root context))
+         (expanded (kmode-kconfig--expand-source-path source context))
          (base (if (memq directive '(rsource orsource))
                    (or (and buffer-file-name
                             (file-name-directory buffer-file-name))
@@ -201,30 +201,30 @@ whether the scanner is inside a help paragraph."
       (user-error "Kconfig source does not exist for this profile: %s" path))
     (find-file path)))
 
-(defvar kemacs-kconfig-mode-map
+(defvar kmode-kconfig-mode-map
   (let ((map (make-sparse-keymap)))
-    (define-key map (kbd "C-c C-o") #'kemacs-kconfig-follow-source)
-    (define-key map (kbd "M-.") #'kemacs-find-config)
+    (define-key map (kbd "C-c C-o") #'kmode-kconfig-follow-source)
+    (define-key map (kbd "M-.") #'kmode-find-config)
     map)
-  "Keymap for Kemacs Kconfig mode.")
+  "Keymap for kmode-emacs Kconfig mode.")
 
 ;;;###autoload
-(define-derived-mode kemacs-kconfig-mode prog-mode "Kconfig"
+(define-derived-mode kmode-kconfig-mode prog-mode "Kconfig"
   "Major mode for Linux kernel Kconfig language files."
-  :syntax-table kemacs-kconfig-mode-syntax-table
-  (setq-local font-lock-defaults '(kemacs-kconfig-font-lock-keywords))
-  (setq-local indent-line-function #'kemacs-kconfig-indent-line)
+  :syntax-table kmode-kconfig-mode-syntax-table
+  (setq-local font-lock-defaults '(kmode-kconfig-font-lock-keywords))
+  (setq-local indent-line-function #'kmode-kconfig-indent-line)
   (setq-local indent-tabs-mode t)
-  (setq-local tab-width kemacs-kconfig-indent-width)
+  (setq-local tab-width kmode-kconfig-indent-width)
   (setq-local comment-start "# ")
   (setq-local comment-end "")
   (setq-local imenu-generic-expression
-              kemacs-kconfig-imenu-generic-expression))
+              kmode-kconfig-imenu-generic-expression))
 
 ;;;###autoload
 (add-to-list 'auto-mode-alist
-             '("/Kconfig\\(?:\\.[^/]+\\)?\\'" . kemacs-kconfig-mode))
+             '("/Kconfig\\(?:\\.[^/]+\\)?\\'" . kmode-kconfig-mode))
 
-(provide 'kemacs-kconfig)
+(provide 'kmode-kconfig)
 
-;;; kemacs-kconfig.el ends here
+;;; kmode-kconfig.el ends here

@@ -1,8 +1,8 @@
-;;; kemacs-navigate.el --- Kernel-aware navigation for Kemacs -*- lexical-binding: t; -*-
+;;; kmode-navigate.el --- Kernel-aware navigation for kmode-emacs -*- lexical-binding: t; -*-
 
 ;; Copyright (C) 2026
 
-;; Author: Kemacs contributors
+;; Author: kmode-emacs contributors
 ;; Keywords: tools, c, linux
 ;; Package-Requires: ((emacs "28.1"))
 
@@ -15,7 +15,7 @@
 
 (require 'cl-lib)
 (require 'grep)
-(require 'kemacs-core)
+(require 'kmode-core)
 (require 'subr-x)
 (require 'thingatpt)
 (require 'xref)
@@ -24,21 +24,21 @@
 (declare-function eglot-current-server "eglot")
 (declare-function eglot-shutdown "eglot" (server))
 
-(defcustom kemacs-stop-eglot-on-profile-change t
+(defcustom kmode-stop-eglot-on-profile-change t
   "Stop kernel Eglot servers when the active build profile changes.
 
 An index produced for one architecture and configuration is not a safe
-semantic view of another.  Kemacs stops affected servers and leaves
-restarting them explicit through `kemacs-eglot-ensure'."
+semantic view of another.  kmode-emacs stops affected servers and leaves
+restarting them explicit through `kmode-eglot-ensure'."
   :type 'boolean
-  :group 'kemacs)
+  :group 'kmode)
 
-(defcustom kemacs-navigation-file-limit 24
+(defcustom kmode-navigation-file-limit 24
   "Maximum number of source/header matches offered without narrowing."
   :type 'integer
-  :group 'kemacs)
+  :group 'kmode)
 
-(defun kemacs--line-include ()
+(defun kmode--line-include ()
   "Return the include path on the current line, or nil."
   (save-excursion
     (beginning-of-line)
@@ -47,7 +47,7 @@ restarting them explicit through `kemacs-eglot-ensure'."
            (line-end-position) t)
       (match-string-no-properties 1))))
 
-(defun kemacs--config-at-point ()
+(defun kmode--config-at-point ()
   "Return the normalized Kconfig symbol at point, or nil."
   (let ((word (thing-at-point 'symbol t))
         (case-fold-search nil))
@@ -55,11 +55,11 @@ restarting them explicit through `kemacs-eglot-ensure'."
       (setq word (string-remove-prefix "CONFIG_" word))
       (and (string-match-p "^[A-Z0-9_]+$" word) word))))
 
-(defun kemacs--search-lines-with-rg (regexp globs root)
+(defun kmode--search-lines-with-rg (regexp globs root)
   "Return rg matches for REGEXP and GLOBS below ROOT.
 
 Each result is a list of file, line number, and line text."
-  (when-let ((rg (kemacs-tool-path "rg" (kemacs-resolve-context root))))
+  (when-let ((rg (kmode-tool-path "rg" (kmode-resolve-context root))))
     (with-temp-buffer
       (let ((default-directory root)
             (arguments (append '("--line-number" "--no-heading" "--color" "never")
@@ -77,7 +77,7 @@ Each result is a list of file, line number, and line text."
                       matches))
               (nreverse matches))))))))
 
-(defun kemacs--search-kconfig-fallback (symbol root)
+(defun kmode--search-kconfig-fallback (symbol root)
   "Find definitions of SYMBOL below ROOT without an external search tool."
   (let ((regexp (format "^[ \t]*\\(?:menuconfig\\|config\\)[ \t]+%s\\_>"
                         (regexp-quote symbol)))
@@ -94,13 +94,13 @@ Each result is a list of file, line number, and line text."
                 matches))))
     (nreverse matches)))
 
-(defun kemacs--read-location (prompt matches)
+(defun kmode--read-location (prompt matches)
   "Read one of MATCHES with PROMPT and return its file/line pair."
   (unless matches
     (user-error "No matching kernel location found"))
   (if (= (length matches) 1)
       (car matches)
-    (let* ((root (kemacs-root))
+    (let* ((root (kmode-root))
            (candidates
             (mapcar (lambda (match)
                       (cons (format "%s:%d  %s"
@@ -111,48 +111,48 @@ Each result is a list of file, line number, and line text."
                     matches)))
       (cdr (assoc (completing-read prompt candidates nil t) candidates)))))
 
-(defun kemacs--visit-location (location)
-  "Visit a LOCATION returned by a Kemacs search function."
+(defun kmode--visit-location (location)
+  "Visit a LOCATION returned by a kmode-emacs search function."
   (find-file (nth 0 location))
   (goto-char (point-min))
   (forward-line (1- (nth 1 location)))
   (back-to-indentation))
 
 ;;;###autoload
-(defun kemacs-find-config (symbol)
+(defun kmode-find-config (symbol)
   "Jump to the Kconfig definition of SYMBOL.
 
 At point, both `FOO' and `CONFIG_FOO' resolve to the Kconfig symbol FOO."
   (interactive
-   (list (read-string "Kconfig symbol: " (kemacs--config-at-point))))
+   (list (read-string "Kconfig symbol: " (kmode--config-at-point))))
   (setq symbol (string-remove-prefix "CONFIG_" symbol))
   (unless (string-match-p "^[A-Z0-9_]+$" symbol)
     (user-error "Not a Kconfig symbol: %s" symbol))
-  (let* ((root (kemacs-root))
+  (let* ((root (kmode-root))
          (regexp (format "^[[:space:]]*(menuconfig|config)[[:space:]]+%s([^[:alnum:]_]|$)"
                          (regexp-quote symbol)))
-         (matches (or (kemacs--search-lines-with-rg
+         (matches (or (kmode--search-lines-with-rg
                        regexp '("Kconfig" "Kconfig.*" "**/Kconfig" "**/Kconfig.*") root)
-                      (kemacs--search-kconfig-fallback symbol root))))
-    (kemacs--visit-location
-     (kemacs--read-location (format "%s definition: " symbol) matches))))
+                      (kmode--search-kconfig-fallback symbol root))))
+    (kmode--visit-location
+     (kmode--read-location (format "%s definition: " symbol) matches))))
 
 ;;;###autoload
-(defun kemacs-grep-config-users (symbol)
+(defun kmode-grep-config-users (symbol)
   "Search the current kernel tree for users of Kconfig SYMBOL."
   (interactive
-   (list (read-string "Kconfig symbol: " (kemacs--config-at-point))))
+   (list (read-string "Kconfig symbol: " (kmode--config-at-point))))
   (setq symbol (string-remove-prefix "CONFIG_" symbol))
   (unless (string-match-p "^[A-Z0-9_]+$" symbol)
     (user-error "Not a Kconfig symbol: %s" symbol))
   (rgrep (concat "\\bCONFIG_" (regexp-quote symbol) "\\b")
-         "*.c *.h *.S *.rs *.dts *.dtsi *.yaml" (kemacs-root)))
+         "*.c *.h *.S *.rs *.dts *.dtsi *.yaml" (kmode-root)))
 
-(defun kemacs--include-candidates (include context)
+(defun kmode--include-candidates (include context)
   "Return existing files that might satisfy INCLUDE in CONTEXT."
-  (let* ((root (kemacs-context-root context))
-         (output (kemacs-context-output context))
-         (srcarch (kemacs-srcarch (kemacs-context-arch context)))
+  (let* ((root (kmode-context-root context))
+         (output (kmode-context-output context))
+         (srcarch (kmode-srcarch (kmode-context-arch context)))
          (local (and buffer-file-name
                      (expand-file-name include
                                        (file-name-directory buffer-file-name))))
@@ -176,16 +176,16 @@ At point, both `FOO' and `CONFIG_FOO' resolve to the Kconfig symbol FOO."
     (delete-dups (seq-filter #'file-regular-p paths))))
 
 ;;;###autoload
-(defun kemacs-follow-include (&optional include)
+(defun kmode-follow-include (&optional include)
   "Visit INCLUDE from the current C source line.
 
 Quoted includes, generated headers, and architecture headers from the
 active profile are considered."
   (interactive)
-  (let* ((include (or include (kemacs--line-include)
+  (let* ((include (or include (kmode--line-include)
                       (read-string "Kernel include: ")))
-         (context (kemacs-resolve-context))
-         (matches (kemacs--include-candidates include context)))
+         (context (kmode-resolve-context))
+         (matches (kmode--include-candidates include context)))
     (unless matches
       (user-error "Could not resolve kernel include: %s" include))
     (find-file
@@ -193,9 +193,9 @@ active profile are considered."
          (car matches)
        (completing-read "Include file: " matches nil t)))))
 
-(defun kemacs--rg-files (root)
+(defun kmode--rg-files (root)
   "Return source files below ROOT using rg when possible."
-  (if-let ((rg (kemacs-tool-path "rg" (kemacs-resolve-context root))))
+  (if-let ((rg (kmode-tool-path "rg" (kmode-resolve-context root))))
       (let ((default-directory root))
         (condition-case nil
             (process-lines rg "--files" "--color" "never")
@@ -205,12 +205,12 @@ active profile are considered."
              root "\\.[chS]\\(?:pp\\)?\\'"))))
 
 ;;;###autoload
-(defun kemacs-toggle-header-source ()
+(defun kmode-toggle-header-source ()
   "Switch between the current kernel source file and a matching header."
   (interactive)
   (unless buffer-file-name
     (user-error "The current buffer has no file"))
-  (let* ((root (kemacs-root))
+  (let* ((root (kmode-root))
          (extension (downcase (or (file-name-extension buffer-file-name) "")))
          (wanted (if (member extension '("h" "hpp"))
                      '("c" "cc" "cpp" "s")
@@ -220,9 +220,9 @@ active profile are considered."
                          (regexp-quote base)
                          (mapconcat #'regexp-quote wanted "\\|")))
          (matches (seq-filter (lambda (file) (string-match-p regexp file))
-                              (kemacs--rg-files root))))
-    (when (> (length matches) kemacs-navigation-file-limit)
-      (setq matches (seq-take matches kemacs-navigation-file-limit)))
+                              (kmode--rg-files root))))
+    (when (> (length matches) kmode-navigation-file-limit)
+      (setq matches (seq-take matches kmode-navigation-file-limit)))
     (unless matches
       (user-error "No matching %s found for %s"
                   (if (equal wanted '("h" "hpp")) "header" "source") base))
@@ -234,10 +234,10 @@ active profile are considered."
       root))))
 
 ;;;###autoload
-(defun kemacs-find-kbuild ()
+(defun kmode-find-kbuild ()
   "Visit the nearest Kbuild or Makefile that owns the current file."
   (interactive)
-  (let* ((root (kemacs-root))
+  (let* ((root (kmode-root))
          (directory (if buffer-file-name
                         (file-name-directory buffer-file-name)
                       default-directory))
@@ -256,32 +256,32 @@ active profile are considered."
       (user-error "No owning Kbuild or Makefile found"))))
 
 ;;;###autoload
-(defun kemacs-grep-documentation (term)
+(defun kmode-grep-documentation (term)
   "Search local kernel Documentation for TERM."
   (interactive (list (read-string "Kernel documentation search: "
                                   (thing-at-point 'symbol t))))
   (rgrep (regexp-quote term) "*.rst *.md *.txt"
-         (expand-file-name "Documentation" (kemacs-root))))
+         (expand-file-name "Documentation" (kmode-root))))
 
 ;;;###autoload
-(defun kemacs-navigation-dwim ()
+(defun kmode-navigation-dwim ()
   "Perform the kernel-aware navigation action most relevant at point."
   (interactive)
   (let* ((raw-symbol (thing-at-point 'symbol t))
          (config-symbol
-          (and (or (derived-mode-p 'kemacs-kconfig-mode)
+          (and (or (derived-mode-p 'kmode-kconfig-mode)
                    (and raw-symbol (string-prefix-p "CONFIG_" raw-symbol)))
-               (kemacs--config-at-point))))
-    (cond ((kemacs--line-include) (kemacs-follow-include))
+               (kmode--config-at-point))))
+    (cond ((kmode--line-include) (kmode-follow-include))
         (config-symbol
          (condition-case nil
-             (kemacs-find-config config-symbol)
+             (kmode-find-config config-symbol)
            (user-error
             (call-interactively #'xref-find-definitions))))
           (t (call-interactively #'xref-find-definitions)))))
 
 ;;;###autoload
-(defun kemacs-find-definition ()
+(defun kmode-find-definition ()
   "Find the definition at point through the active Xref backend.
 
 When Eglot manages the buffer this uses clangd's semantic index; otherwise
@@ -290,7 +290,7 @@ it uses the best Tags or major-mode backend available to Emacs."
   (call-interactively #'xref-find-definitions))
 
 ;;;###autoload
-(defun kemacs-find-callers ()
+(defun kmode-find-callers ()
   "Find references and call sites for the identifier at point.
 
 With Eglot/clangd these are semantic references.  Other Xref backends may
@@ -299,20 +299,22 @@ provide a broader textual result set."
   (call-interactively #'xref-find-references))
 
 ;;;###autoload
-(defun kemacs-navigation-back ()
+(defun kmode-navigation-back ()
   "Return to the location before the most recent Xref navigation."
   (interactive)
   (call-interactively
    (if (fboundp 'xref-go-back)
        #'xref-go-back
-     #'xref-pop-marker-stack)))
+     ;; Keep the Emacs 28 fallback out of byte-compiled symbol references:
+     ;; newer Emacsen mark this compatibility command obsolete.
+     (intern "xref-pop-marker-stack"))))
 
-(defun kemacs--stop-eglot-after-profile-change ()
+(defun kmode--stop-eglot-after-profile-change ()
   "Stop Eglot servers whose kernel profile has just changed."
-  (when (and kemacs-stop-eglot-on-profile-change
+  (when (and kmode-stop-eglot-on-profile-change
              (featurep 'eglot)
              (fboundp 'eglot-current-server))
-    (let ((root (kemacs-root t)) servers)
+    (let ((root (kmode-root t)) servers)
       (dolist (buffer (buffer-list))
         (with-current-buffer buffer
           (when (and root buffer-file-name
@@ -322,23 +324,24 @@ provide a broader textual result set."
       (dolist (server servers)
         (ignore-errors (eglot-shutdown server)))
       (when servers
-        (message "Kemacs stopped stale Eglot server(s); restart clangd for the new profile")))))
+        (message
+         "Kmode-emacs stopped stale Eglot server(s); restart clangd for the new profile")))))
 
-(add-hook 'kemacs-profile-changed-hook
-          #'kemacs--stop-eglot-after-profile-change)
+(add-hook 'kmode-profile-changed-hook
+          #'kmode--stop-eglot-after-profile-change)
 
 ;;;###autoload
-(defun kemacs-eglot-ensure ()
+(defun kmode-eglot-ensure ()
   "Start Eglot/clangd using the active profile's compilation database."
   (interactive)
   (unless (require 'eglot nil t)
     (user-error "Eglot is not installed; install it or use tags/xref"))
-  (let* ((context (kemacs-resolve-context))
-         (clangd (kemacs-require-tool "clangd" context))
-         (database-dir (kemacs-context-output context))
+  (let* ((context (kmode-resolve-context))
+         (clangd (kmode-require-tool "clangd" context))
+         (database-dir (kmode-context-output context))
          (database (expand-file-name "compile_commands.json" database-dir)))
     (unless (file-readable-p database)
-      (user-error "No %s; run `kemacs-build-compile-commands' first"
+      (user-error "No %s; run `kmode-build-compile-commands' first"
                   database))
     (setq-local eglot-server-programs
                 (cons (cons major-mode
@@ -348,31 +351,31 @@ provide a broader textual result set."
                       (assq-delete-all major-mode eglot-server-programs)))
     (eglot-ensure)))
 
-(kemacs-register-action
+(kmode-register-action
  'navigate-dwim "Definition/include/config at point" "Navigate"
- #'kemacs-navigation-dwim
+ #'kmode-navigation-dwim
  :description "Follow includes and CONFIG symbols before falling back to xref")
-(kemacs-register-action
- 'find-definition "Find definition" "Navigate" #'kemacs-find-definition
+(kmode-register-action
+ 'find-definition "Find definition" "Navigate" #'kmode-find-definition
  :description "Use clangd/Eglot or the active Xref backend")
-(kemacs-register-action
- 'find-callers "Find references / callers" "Navigate" #'kemacs-find-callers
+(kmode-register-action
+ 'find-callers "Find references / callers" "Navigate" #'kmode-find-callers
  :description "List semantic call sites when clangd is active")
-(kemacs-register-action
- 'find-config "Find Kconfig symbol" "Navigate" #'kemacs-find-config)
-(kemacs-register-action
- 'grep-config "Find CONFIG users" "Navigate" #'kemacs-grep-config-users)
-(kemacs-register-action
- 'toggle-source "Toggle source/header" "Navigate" #'kemacs-toggle-header-source)
-(kemacs-register-action
- 'find-kbuild "Find owning Kbuild" "Navigate" #'kemacs-find-kbuild)
-(kemacs-register-action
- 'docs "Search Documentation/" "Navigate" #'kemacs-grep-documentation)
-(kemacs-register-action
- 'eglot "Start profile-aware clangd" "Navigate" #'kemacs-eglot-ensure
+(kmode-register-action
+ 'find-config "Find Kconfig symbol" "Navigate" #'kmode-find-config)
+(kmode-register-action
+ 'grep-config "Find CONFIG users" "Navigate" #'kmode-grep-config-users)
+(kmode-register-action
+ 'toggle-source "Toggle source/header" "Navigate" #'kmode-toggle-header-source)
+(kmode-register-action
+ 'find-kbuild "Find owning Kbuild" "Navigate" #'kmode-find-kbuild)
+(kmode-register-action
+ 'docs "Search Documentation/" "Navigate" #'kmode-grep-documentation)
+(kmode-register-action
+ 'eglot "Start profile-aware clangd" "Navigate" #'kmode-eglot-ensure
  :predicate (lambda () (and (locate-library "eglot")
-                            (kemacs-tool-path "clangd"))))
+                            (kmode-tool-path "clangd"))))
 
-(provide 'kemacs-navigate)
+(provide 'kmode-navigate)
 
-;;; kemacs-navigate.el ends here
+;;; kmode-navigate.el ends here

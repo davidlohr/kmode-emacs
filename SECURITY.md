@@ -1,11 +1,11 @@
 # Security policy
 
-Kemacs is pre-1.0 and currently supports only the latest code on the default
+kmode-emacs is pre-1.0 and currently supports only the latest code on the default
 branch.  There are no maintained release branches yet.
 
 ## Reporting a vulnerability
 
-Use [GitHub private vulnerability reporting](https://github.com/davidlohr/kemacs-mode/security/advisories/new)
+Use [GitHub private vulnerability reporting](https://github.com/davidlohr/kmode-emacs/security/advisories/new)
 to start a private security advisory.  Please do not put exploit details,
 credentials, private paths, or vulnerable guest/host information in a public
 issue.  If that private form is unavailable, open a minimal public issue
@@ -28,7 +28,7 @@ reports on a best-effort basis while the project is pre-release.
 
 ## Operational scope
 
-Kemacs launches developer-selected kernel tools.  A trusted Linux checkout,
+kmode-emacs launches developer-selected kernel tools.  A trusted Linux checkout,
 build configuration, compiler database, QEMU vector, virtme-ng profile, guest
 command, or tree-local script can execute code and may expose host resources.
 That expected capability is not itself a vulnerability.  A bypass of the

@@ -1,8 +1,8 @@
 EMACS ?= emacs
 
-ELISP_SOURCES := $(sort $(wildcard kemacs*.el))
+ELISP_SOURCES := $(sort $(wildcard kmode*.el))
 ELISP_COMPILED := $(ELISP_SOURCES:.el=.elc)
-TEST_FILE := test/kemacs-test.el
+TEST_FILE := test/kmode-test.el
 TEST_COMPILED := $(TEST_FILE:.el=.elc)
 
 .DEFAULT_GOAL := check
@@ -24,7 +24,7 @@ checkdoc:
 	$(EMACS) -Q --batch -L . -L test \
 	  --eval '(setq load-prefer-newer t)' \
 	  -l $(TEST_FILE) \
-	  -f kemacs-test-checkdoc-batch
+	  -f kmode-test-checkdoc-batch
 
 check: compile test checkdoc
 

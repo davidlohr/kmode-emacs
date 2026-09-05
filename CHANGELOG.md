@@ -1,12 +1,15 @@
 # Changelog
 
-All notable user-visible changes to Kemacs will be documented here.  The
+All notable user-visible changes to kmode-emacs will be documented here.  The
 project is pre-release; interfaces may change before 1.0.
 
 ## [Unreleased]
 
 ### Added
 
+- The project is published as `kmode-emacs`; files, features, commands,
+  customization variables, process buffers, tests, and documentation use the
+  `kmode-` namespace before the first stable release.
 - A task-oriented getting-started guide covering safe out-of-tree profiles,
   the first build, dashboard operation, semantic definition/caller setup, the
   complete navigation map, initial virtme-ng workflows, and troubleshooting;
@@ -14,7 +17,7 @@ project is pre-release; interfaces may change before 1.0.
 - Public-repository hygiene for generated Emacs artifacts and local agent
   workspace state, plus bug-report and pull-request templates and a security
   reporting policy.
-- Initial `kemacs-mode` 0.1.0 development implementation for Emacs 28.1 and
+- Initial `kmode-emacs` 0.1.0 development implementation for Emacs 28.1 and
   newer, including a globalized auto-enable mode, kernel-local `C-c k` command
   map/menu, mode-line profile, Emacs Project integration, scoped Linux C style,
   profile-derived `compile-command`, and a profile-owned remap for edited
@@ -31,7 +34,7 @@ project is pre-release; interfaces may change before 1.0.
   object/directory, configuration targets, `compile_commands.json`, Sparse,
   and confirmed cleanup, with ambient Kbuild-selector sanitization;
   checkout-contained child `PATH` entries are removed unless explicitly listed
-  in `kemacs-build-trusted-path-directories`; `menuconfig` uses an interactive
+  in `kmode-build-trusted-path-directories`; `menuconfig` uses an interactive
   Term buffer.
 - Optional profile-aware extra-warning, Smatch, report-only Coccinelle, Clang
   analyzer, and checkstack commands with tool/target/artifact checks.
@@ -68,7 +71,7 @@ project is pre-release; interfaces may change before 1.0.
   raw QEMU.  Hardened profile handling includes an exact canonical long-option
   allowlist, coherent ambiguous/cross-architecture resolution, build-only root
   omission, cross-runtime root enforcement, fixed
-  `kemacs-vng-home-directory` config discovery, typed fail-closed trusted
+  `kmode-vng-home-directory` config discovery, typed fail-closed trusted
   `default_opts`, dangerous-option confirmation, and checkout-safe child
   `PATH`.  Build-then-run/debug preflights and freezes the runtime plan before
   Compilation starts, revalidates it on success, and launches without stealing
