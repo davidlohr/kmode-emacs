@@ -13,6 +13,19 @@ globalized auto-enable mode, but there is not yet a packaged release or stable
 compatibility promise.  This README labels future work as **planned**; command
 tables describe only code present in the repository.
 
+## Kmode in action
+
+These are real Emacs sessions against a Linux kernel checkout, not mockups.
+Click any image for the full-size capture.
+
+| Flight deck — `C-c k k` | Implementation and callers — `C-c k n r` |
+| --- | --- |
+| [![Kmode flight deck beside a live kernel source buffer](docs/screenshots/01-flight-deck.png)](docs/screenshots/01-flight-deck.png) | [![wake_up_process implementation beside its Xref callers](docs/screenshots/02-implementation-callers.png)](docs/screenshots/02-implementation-callers.png) |
+| CONFIG-aware navigation — `C-c k n .` | Read-only change-impact plan — `C-u C-c k i` |
+| [![CONFIG_PREEMPT_DYNAMIC use beside its Kconfig definition](docs/screenshots/03-config-navigation.png)](docs/screenshots/03-config-navigation.png) | [![Kmode change-impact plan for a real kernel commit](docs/screenshots/04-change-impact.png)](docs/screenshots/04-change-impact.png) |
+| Exact virtme-ng command plan — `C-c k v s` | |
+| [![Kmode generated virtme-ng build run preview and debug commands](docs/screenshots/05-virtme-ng-commands.png)](docs/screenshots/05-virtme-ng-commands.png) | |
+
 ## Start here
 
 New users should begin with the task-oriented
