@@ -59,11 +59,35 @@
 (declare-function kmode-vng-config-safe-p "kmode-virtme")
 (declare-function kmode-vng-processes "kmode-virtme")
 (declare-function kmode-vng-stop "kmode-virtme")
+(declare-function kmode-dashboard "kmode-ui")
 (declare-function kmode-dashboard-mode "kmode-ui")
 (declare-function kmode-dashboard-refresh "kmode-ui")
 (declare-function kmode-dispatch "kmode-ui")
+(declare-function kmode-command-root "kmode-core")
+(declare-function kmode-global-mode "kmode-emacs")
+(declare-function kmode--cscope-inverted-index-p "kmode-navigate")
 (declare-function kmode-mode "kmode-emacs")
 (declare-function kmode-project-find "kmode-emacs")
+(declare-function kmode-refresh-tags-table "kmode-emacs")
+(declare-function kmode--refresh-tags-file-buffer "kmode-emacs" (file))
+(declare-function kmode-build--tags-finished "kmode-build")
+(declare-function kmode-build--cscope-finished "kmode-build")
+(declare-function kmode-build-cscope "kmode-build")
+(declare-function tags-table-mode "etags" ())
+(declare-function kmode-build-tags "kmode-build")
+(declare-function kmode--call-xcscope "kmode-navigate")
+(declare-function kmode--protect-xcscope-result-rerun
+                  "kmode-navigate" (buffer start state &optional exact))
+(declare-function kmode--xcscope-rerun
+                  "kmode-navigate" (state search))
+(declare-function kmode-cscope-available-p "kmode-navigate")
+(declare-function kmode-cscope-find-callees "kmode-navigate")
+(declare-function kmode-cscope-find-callers "kmode-navigate")
+(declare-function kmode-cscope-find-definition "kmode-navigate")
+(declare-function kmode-cscope-find-includers "kmode-navigate")
+(declare-function kmode-cscope-find-symbol "kmode-navigate")
+(declare-function kmode-cscope-find-text "kmode-navigate")
+(declare-function kmode-eglot-ensure "kmode-navigate")
 (declare-function kmode-checkpatch-flymake "kmode-flymake")
 (declare-function kmode-checkpatch-flymake--cancel "kmode-flymake")
 (declare-function kmode-checkpatch-flymake--parse-output "kmode-flymake")
@@ -77,6 +101,8 @@
       'native-comp-enable-subr-trampolines
     'comp-enable-subr-trampolines)
   "Compatibility alias for Emacs's subr-trampoline control variable.")
+(defvar kmode--last-root)
+(defvar kmode-default-root)
 (defvar kmode--saved-locals)
 (defvar kmode-apply-kernel-c-style)
 (defvar kmode-build-default-target)
@@ -88,16 +114,24 @@
 (defvar kmode-impact-context)
 (defvar kmode-impact-origin)
 (defvar kmode-impact-root)
+(defvar kmode-global-mode)
+(defvar kmode-global-mode-map)
+(defvar kmode-command-map)
 (defvar kmode-mode)
 (defvar kmode-kunit-build-directory)
 (defvar kmode-set-compile-command)
-(defvar kmode-command-map)
 (defvar kmode-navigation-map)
 (defvar kmode-vng-confirm-host-access)
 (defvar kmode-vng-home-directory)
 (defvar kmode-vng-map)
 (defvar kmode-vng-program)
 (defvar kmode-vng-trust-default-options)
+(defvar kmode-auto-activate-tags)
+(defvar kmode-clangd-arguments)
+(defvar kmode-cscope-map)
+(defvar kmode-kernel-fill-column)
+(defvar kmode-require-final-newline)
+(defvar kmode-show-trailing-whitespace)
 (defvar kmode-checkpatch-flymake--output-buffer)
 (defvar kmode-checkpatch-flymake--process)
 (defvar kmode-checkpatch-flymake--report-function)
@@ -105,6 +139,33 @@
 (defvar kmode-checkpatch-flymake--started-flymake)
 (defvar kmode-checkpatch-flymake--temporary-file)
 (defvar kmode-checkpatch-flymake-mode)
+(defvar c-label-minimum-indentation)
+(defvar c-offsets-alist)
+(defvar cscope-database-file)
+(defvar cscope-database-regexps)
+(defvar cscope-index-file)
+(defvar cscope-initial-directory)
+(defvar cscope-option-disable-compression)
+(defvar cscope-option-do-not-update-database)
+(defvar cscope-option-include-directories)
+(defvar cscope-option-kernel-mode)
+(defvar cscope-option-other)
+(defvar cscope-option-use-inverted-index)
+(defvar cscope-output-buffer-name)
+(defvar cscope-process)
+(defvar cscope-program)
+(defvar cscope-result-separator)
+(defvar eglot-server-programs)
+(defvar tags-completion-table)
+(defvar tags-table-computed-list)
+(defvar tags-table-computed-list-for)
+(defvar tags-table-list-pointer)
+(defvar tags-table-list-started-at)
+(defvar tags-table-set-list)
+(defvar tags-file-name)
+(defvar tags-included-tables)
+(defvar tags-table-files)
+(defvar tags-table-list)
 
 (defvar kmode-test--dispatch-count 0
   "Number of times the dispatcher test command has run.")
@@ -155,6 +216,7 @@
   `(let* ((,root (make-temp-file "kmode-kernel-" t))
           (kmode--root-cache (make-hash-table :test #'equal))
           (kmode--selected-profiles (make-hash-table :test #'equal))
+          (kmode--last-root nil)
           (kmode--actions (copy-sequence kmode--actions))
           (kmode-root-override nil)
           (kmode-profile nil)
@@ -277,6 +339,120 @@
           (should (equal (kmode-locate-root)
                          (file-name-as-directory root))))
       (delete-directory root t))))
+
+(ert-deftest kmode-test/command-root-prefers-current-tree-and-remembers-it ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (kmode-test-with-kernel-tree (current-root)
+    (kmode-test-with-kernel-tree (remembered-root)
+      (let ((kmode--last-root (file-name-as-directory remembered-root)))
+        (with-temp-buffer
+          (setq default-directory
+                (file-name-as-directory
+                 (expand-file-name "drivers/net" current-root)))
+          (cl-letf (((symbol-function 'read-directory-name)
+                     (lambda (&rest _arguments)
+                       (ert-fail "Current kernel context prompted for a root"))))
+            (should (equal (kmode-command-root)
+                           (file-name-as-directory current-root))))
+          (should (equal kmode--last-root
+                         (file-name-as-directory current-root))))))))
+
+(ert-deftest kmode-test/command-root-revalidates-cached-current-tree ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (kmode-test-with-kernel-tree (stale-root)
+    (kmode-test-with-kernel-tree (remembered-root)
+      (let ((kmode--last-root (file-name-as-directory remembered-root))
+            (kmode-default-root nil))
+        (with-temp-buffer
+          (setq default-directory
+                (file-name-as-directory
+                 (expand-file-name "drivers/net" stale-root)))
+          ;; Prime `kmode-locate-root' with a result which the filesystem no
+          ;; longer supports before asking a project-wide command for a root.
+          (should (equal (kmode-root t)
+                         (file-name-as-directory stale-root)))
+          (delete-file (expand-file-name "MAINTAINERS" stale-root))
+          (cl-letf (((symbol-function 'read-directory-name)
+                     (lambda (&rest _arguments)
+                       (ert-fail "A valid remembered root should not prompt"))))
+            (should (equal (kmode-command-root)
+                           (file-name-as-directory remembered-root))))
+          (should (equal kmode--last-root
+                         (file-name-as-directory remembered-root))))))))
+
+(ert-deftest kmode-test/command-root-uses-valid-configured-default ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((outside (make-temp-file "kmode-command-default-" t))
+           (expected (file-name-as-directory root))
+           (kmode--last-root nil)
+           (kmode-default-root (expand-file-name "drivers/net" root)))
+      (unwind-protect
+          (with-temp-buffer
+            (setq default-directory (file-name-as-directory outside))
+            (cl-letf (((symbol-function 'read-directory-name)
+                       (lambda (&rest _arguments)
+                         (ert-fail "valid configured root should not prompt"))))
+              (should (equal (kmode-command-root) expected))
+              (should (equal kmode--last-root expected))))
+        (delete-directory outside t)))))
+
+(ert-deftest kmode-test/command-root-reuses-valid-remembered-tree ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let ((outside (make-temp-file "kmode-outside-" t))
+          (kmode--last-root (file-name-as-directory root)))
+      (unwind-protect
+          (with-temp-buffer
+            (setq default-directory (file-name-as-directory outside))
+            (cl-letf (((symbol-function 'read-directory-name)
+                       (lambda (&rest _arguments)
+                         (ert-fail "Valid remembered root prompted again"))))
+              (should (equal (kmode-command-root)
+                             (file-name-as-directory root))))
+            (should-not (bound-and-true-p kmode-mode)))
+        (delete-directory outside t)))))
+
+(ert-deftest kmode-test/command-root-prompts-for-stale-root-and-accepts-nested-directory ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let ((outside (make-temp-file "kmode-outside-" t))
+          (kmode--last-root nil)
+          (prompt-count 0))
+      (unwind-protect
+          (with-temp-buffer
+            (setq default-directory (file-name-as-directory outside)
+                  kmode--last-root (file-name-as-directory outside))
+            (cl-letf (((symbol-function 'read-directory-name)
+                       (lambda (&rest _arguments)
+                         (cl-incf prompt-count)
+                         (expand-file-name "drivers/net" root))))
+              (should (equal (kmode-command-root)
+                             (file-name-as-directory root))))
+            (should (= prompt-count 1))
+            (should (equal kmode--last-root
+                           (file-name-as-directory root))))
+        (delete-directory outside t)))))
+
+(ert-deftest kmode-test/command-root-rejects-non-kernel-selection ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (let ((outside (make-temp-file "kmode-outside-" t))
+        (kmode--root-cache (make-hash-table :test #'equal))
+        (kmode--last-root nil))
+    (unwind-protect
+        (with-temp-buffer
+          (setq default-directory (file-name-as-directory outside))
+          (cl-letf (((symbol-function 'read-directory-name)
+                     (lambda (&rest _arguments) outside)))
+            (should-error (kmode-command-root) :type 'user-error))
+          (should-not kmode--last-root))
+      (delete-directory outside t))))
 
 (ert-deftest kmode-test/positive-jobs-normalizes-supported-values ()
   (should (integerp (kmode--positive-jobs 'auto)))
@@ -518,6 +694,41 @@
           (funcall mutation context)
           (should-error (kmode-build-make-arguments context)
                         :type 'user-error))))))
+
+(ert-deftest kmode-test/build-argv-rejects-managed-output-overrides ()
+  (unless (featurep 'kmode-build)
+    (ert-skip "kmode-build.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let ((context (kmode--make-context
+                    :root (file-name-as-directory root)
+                    :profile "managed-output"
+                    :output (file-name-as-directory
+                             (expand-file-name "output" root))
+                    :compiler 'auto)))
+      (dolist (argument '("O=/tmp/wrong" "O:=relative" "O+=suffix"
+                          "O = /tmp/wrong" " O=/tmp/wrong"
+                          "KBUILD_OUTPUT=/tmp/wrong"
+                          "KBUILD_OUTPUT ?= /tmp/wrong"
+                          "KBUILD_OUTPUT::=/tmp/wrong"
+                          "KBUILD_OUTPUT ::= /tmp/wrong"
+                          "KBUILD_OUTPUT:::=/tmp/wrong"
+                          "KBUILD_OUTPUT != printf-wrong"))
+        (let ((profile-context (copy-kmode-context context)))
+          (setf (kmode-context-make-arguments profile-context)
+                (list argument))
+          (should-error (kmode-build-make-arguments profile-context)
+                        :type 'user-error))
+        (should-error
+         (kmode-build-make-arguments context nil (list argument))
+         :type 'user-error))
+      (dolist (argument '("V=1" "KCFLAGS=-Werror"
+                          "OUTPUT=/tmp/allowed"
+                          "KBUILD_OUTPUT_SUFFIX=allowed"
+                          "OOPS=allowed" "o=/tmp/lowercase"
+                          "FOO=O=/tmp/embedded"))
+        (should (member argument
+                        (kmode-build-make-arguments
+                         context nil (list argument))))))))
 
 (ert-deftest kmode-test/build-object-and-directory-targets-are-relative ()
   (unless (featurep 'kmode-build)
@@ -2173,6 +2384,9 @@
           (should (string-match-p "topic/test.*clean" text))
           (should (string-match-p "\\.config[[:space:]]+ready" text))
           (should (string-match-p "Compile DB[[:space:]]+missing" text))
+          (should (string-match-p "clangd index[[:space:]]+missing" text))
+          (should (string-match-p "TAGS[[:space:]]+missing" text))
+          (should (string-match-p "cscope[[:space:]]+missing" text))
           (should (string-match-p "Available action.*Ready to run" text))
           (should (string-match-p "Unavailable action" text)))
         (goto-char (point-min))
@@ -2180,6 +2394,59 @@
         (should (button-at (1- (point))))
         (search-forward "Unavailable action")
         (should-not (button-at (1- (point))))))))
+
+(ert-deftest kmode-test/dashboard-index-storage-rows-follow-profile-output ()
+  (unless (featurep 'kmode-ui)
+    (ert-skip "kmode-ui.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory
+                    (expand-file-name "profile-output" root)))
+           (origin (generate-new-buffer " *kmode-dashboard-storage-origin*"))
+           (dashboard (generate-new-buffer " *kmode-dashboard-storage*"))
+           (kmode--actions nil)
+           (kmode-profiles
+            `(("default" :compiler auto :jobs nil :output ,output))))
+      (make-directory output t)
+      ;; Decoys in the source root must not make an out-of-tree profile ready.
+      (kmode-test--write-file root "compile_commands.json" "[]\n")
+      (kmode-test--write-file root "TAGS")
+      (kmode-test--write-file root "cscope.out")
+      (make-directory (expand-file-name ".cache/clangd/index" root) t)
+      (unwind-protect
+          (progn
+            (with-current-buffer origin
+              (setq default-directory root))
+            (with-current-buffer dashboard
+              (kmode-dashboard-mode)
+              (setq-local kmode-dashboard-root root)
+              (setq-local kmode-dashboard-origin origin)
+              (setq-local kmode-root-override root)
+              (setq default-directory root)
+              (cl-letf (((symbol-function 'kmode--git-string)
+                         (lambda (&rest _arguments) "")))
+                (kmode-dashboard-refresh))
+              (let ((text (buffer-substring-no-properties
+                           (point-min) (point-max))))
+                (dolist (row '("Compile DB" "clangd index" "TAGS" "cscope"))
+                  (should (string-match-p
+                           (format "%s[[:space:]]+missing" row) text))))
+              (kmode-test--write-file output "compile_commands.json" "[]\n")
+              (kmode-test--write-file output "TAGS")
+              (kmode-test--write-file output "cscope.out")
+              (make-directory (expand-file-name ".cache/clangd/index" output) t)
+              (cl-letf (((symbol-function 'kmode--git-string)
+                         (lambda (&rest _arguments) "")))
+                (kmode-dashboard-refresh))
+              (let ((text (buffer-substring-no-properties
+                           (point-min) (point-max))))
+                (dolist (row '("Compile DB" "clangd index" "TAGS" "cscope"))
+                  (should (string-match-p
+                           (format "%s[[:space:]]+ready" row) text))))))
+        (when (buffer-live-p dashboard)
+          (kill-buffer dashboard))
+        (when (buffer-live-p origin)
+          (kill-buffer origin))))))
 
 (ert-deftest kmode-test/dashboard-uses-origin-buffer-context ()
   (unless (featurep 'kmode-ui)
@@ -2231,6 +2498,48 @@
           (kill-buffer dashboard))
         (when (buffer-live-p origin)
           (kill-buffer origin))))))
+
+(ert-deftest kmode-test/dashboard-launches-from-outside-with-selected-root ()
+  (unless (and (featurep 'kmode-ui) (featurep 'kmode-emacs))
+    (ert-skip "kmode dashboard integration is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (outside (make-temp-file "kmode-dashboard-outside-" t))
+           (origin (generate-new-buffer " *kmode-dashboard-outside-origin*"))
+           (kmode--last-root nil)
+           displayed
+           refreshed)
+      (unwind-protect
+          (progn
+            (with-current-buffer origin
+              (setq default-directory (file-name-as-directory outside))
+              (cl-letf (((symbol-function 'read-directory-name)
+                         (lambda (&rest _arguments)
+                           (expand-file-name "drivers/net" root)))
+                        ((symbol-function 'kmode-dashboard-refresh)
+                         (lambda () (setq refreshed t)))
+                        ((symbol-function 'pop-to-buffer)
+                         (lambda (buffer-or-name &rest _arguments)
+                           (setq displayed (get-buffer buffer-or-name)))))
+                (kmode-dashboard))
+              (should (equal default-directory
+                             (file-name-as-directory outside)))
+              (should-not (local-variable-p 'kmode-root-override origin))
+              (should-not (bound-and-true-p kmode-mode)))
+            (should refreshed)
+            (should (buffer-live-p displayed))
+            (with-current-buffer displayed
+              (should (derived-mode-p 'kmode-dashboard-mode))
+              (should (equal kmode-dashboard-root root))
+              (should (eq kmode-dashboard-origin origin))
+              (should (equal kmode-root-override root))
+              (should (equal default-directory root)))
+            (should (equal kmode--last-root root)))
+        (when (buffer-live-p displayed)
+          (kill-buffer displayed))
+        (when (buffer-live-p origin)
+          (kill-buffer origin))
+        (delete-directory outside t)))))
 
 (ert-deftest kmode-test/impact-button-rejects-context-drift ()
   (unless (featurep 'kmode-impact)
@@ -2284,6 +2593,100 @@
           (should-error (kmode-mode 1) :type 'user-error)
           (should-not kmode-mode)
           (should-not kmode--saved-locals))
+      (delete-directory outside t))))
+
+(ert-deftest kmode-test/global-mode-exposes-prefix-outside-kernel-trees ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (let ((outside (make-temp-file "kmode-global-outside-" t))
+        (global-map (copy-keymap global-map))
+        (was-enabled (bound-and-true-p kmode-global-mode))
+        (kmode-set-compile-command nil)
+        (kmode-apply-kernel-c-style nil))
+    (unwind-protect
+        (progn
+          (kmode-global-mode -1)
+          (define-key global-map (kbd "C-c k") nil)
+          (with-temp-buffer
+            (setq default-directory (file-name-as-directory outside)
+                  buffer-file-name (expand-file-name "notes.c" outside))
+            (kmode-global-mode 1)
+            (should kmode-global-mode)
+            (should-not (bound-and-true-p kmode-mode))
+            (should (eq (lookup-key kmode-global-mode-map (kbd "C-c k"))
+                        kmode-command-map))
+            (should (eq (key-binding (kbd "C-c k k"))
+                        'kmode-dashboard))
+            (should (eq (key-binding (kbd "C-c k n d"))
+                        'kmode-find-definition))
+            (kmode-global-mode -1)
+            (should-not kmode-global-mode)
+            (should-not (key-binding (kbd "C-c k k")))))
+      (kmode-global-mode -1)
+      (when was-enabled
+        (kmode-global-mode 1))
+      (delete-directory outside t))))
+
+(ert-deftest kmode-test/global-mode-disable-cleans-up-buffer-local-mode ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let ((source (expand-file-name "drivers/net/kmode_dummy.c" root))
+          (global-map (copy-keymap global-map))
+          (was-enabled (bound-and-true-p kmode-global-mode))
+          (kmode-set-compile-command nil)
+          (kmode-apply-kernel-c-style nil)
+          buffer)
+      (unwind-protect
+          (progn
+            (kmode-global-mode -1)
+            (define-key global-map (kbd "C-c k") nil)
+            (setq buffer (find-file-noselect source))
+            (with-current-buffer buffer
+              (should-not (bound-and-true-p kmode-mode)))
+            (kmode-global-mode 1)
+            (with-current-buffer buffer
+              (should (bound-and-true-p kmode-mode))
+              (should (eq (key-binding (kbd "C-c k k"))
+                          'kmode-dashboard)))
+            (kmode-global-mode -1)
+            (with-current-buffer buffer
+              (should-not (bound-and-true-p kmode-mode))
+              (should-not (key-binding (kbd "C-c k k")))))
+        (kmode-global-mode -1)
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))
+        (when was-enabled
+          (kmode-global-mode 1))))))
+
+(ert-deftest kmode-test/global-mode-does-not-clobber-global-prefix ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (let* ((outside (make-temp-file "kmode-global-binding-" t))
+         (global-map (copy-keymap global-map))
+         (foreign-map (let ((map (make-sparse-keymap)))
+                        (define-key map (kbd "x") #'ignore)
+                        map))
+         (was-enabled (bound-and-true-p kmode-global-mode))
+         (kmode-set-compile-command nil)
+         (kmode-apply-kernel-c-style nil))
+    (unwind-protect
+        (progn
+          (kmode-global-mode -1)
+          (define-key global-map (kbd "C-c k") foreign-map)
+          (with-temp-buffer
+            (setq default-directory (file-name-as-directory outside))
+            (kmode-global-mode 1)
+            (should (eq (lookup-key global-map (kbd "C-c k")) foreign-map))
+            (should (eq (key-binding (kbd "C-c k k"))
+                        'kmode-dashboard))
+            (kmode-global-mode -1)
+            (should (eq (lookup-key global-map (kbd "C-c k")) foreign-map))
+            (should (eq (key-binding (kbd "C-c k x")) 'ignore))
+            (should-not (key-binding (kbd "C-c k k")))))
+      (kmode-global-mode -1)
+      (when was-enabled
+        (kmode-global-mode 1))
       (delete-directory outside t))))
 
 (ert-deftest kmode-test/mode-restores-c-buffer-style-on-disable ()
@@ -2706,6 +3109,935 @@
                                  buffer-name root))))
         (when (buffer-live-p buffer)
           (kill-buffer buffer))))))
+
+(ert-deftest kmode-test/kernel-c-style-installs-offsets-and-restores-state ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let ((kmode-set-compile-command nil)
+          (kmode-auto-activate-tags nil)
+          (kmode-apply-kernel-c-style t)
+          (kmode-kernel-fill-column 88)
+          (kmode-show-trailing-whitespace t)
+          (kmode-require-final-newline t))
+      (with-temp-buffer
+        (c-mode)
+        (setq default-directory
+              (file-name-as-directory (expand-file-name "drivers/net" root)))
+        (setq-local indent-tabs-mode nil)
+        (setq-local tab-width 3)
+        (setq-local c-basic-offset 2)
+        (setq-local c-label-minimum-indentation 4)
+        (setq-local fill-column 72)
+        (setq-local show-trailing-whitespace nil)
+        (setq-local require-final-newline nil)
+        (c-set-offset 'arglist-close '+)
+        (c-set-offset 'arglist-cont-nonempty '++)
+        (let ((original-offsets (copy-tree c-offsets-alist)))
+          (kmode-mode 1)
+          (should
+           (eq (cdr (assq 'arglist-close c-offsets-alist))
+               'kmode--c-lineup-arglist-tabs-only))
+          (should
+           (equal (cdr (assq 'arglist-cont-nonempty c-offsets-alist))
+                  '(c-lineup-gcc-asm-reg
+                    kmode--c-lineup-arglist-tabs-only)))
+          (should indent-tabs-mode)
+          (should (= tab-width 8))
+          (should (= c-basic-offset 8))
+          (should (= c-label-minimum-indentation 0))
+          (should (= fill-column 88))
+          (should show-trailing-whitespace)
+          (should require-final-newline)
+          (kmode-mode -1)
+          (should (equal c-offsets-alist original-offsets)))
+        (should-not indent-tabs-mode)
+        (should (= tab-width 3))
+        (should (= c-basic-offset 2))
+        (should (= c-label-minimum-indentation 4))
+        (should (= fill-column 72))
+        (should-not show-trailing-whitespace)
+        (should-not require-final-newline)))))
+
+(ert-deftest kmode-test/profile-output-tags-activate-locally-and-restore ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((output (file-name-as-directory
+                    (expand-file-name "profile-output" root)))
+           (table (kmode-test--write-file output "TAGS"))
+           (kmode-set-compile-command nil)
+           (kmode-apply-kernel-c-style nil)
+           (kmode-auto-activate-tags t))
+      (with-temp-buffer
+        (setq default-directory (file-name-as-directory root))
+        (setq-local kmode-output-directory output)
+        (setq-local tags-file-name "/user/existing/TAGS")
+        (setq-local tags-table-list '("/user/one" "/user/two"))
+        (kmode-mode 1)
+        (should (equal tags-file-name table))
+        (should-not tags-table-list)
+        (kmode-mode -1)
+        (should (equal tags-file-name "/user/existing/TAGS"))
+        (should (equal tags-table-list '("/user/one" "/user/two")))))))
+
+(ert-deftest kmode-test/index-build-commands-check-tools-and-delegate-exactly ()
+  (unless (featurep 'kmode-build)
+    (ert-skip "kmode-build.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let ((context (kmode--make-context
+                    :root (file-name-as-directory root)
+                    :profile "index"
+                    :output (file-name-as-directory root)
+                    :compiler 'auto))
+          required
+          started)
+      (cl-letf (((symbol-function 'kmode-resolve-context)
+                 (lambda (&optional _root) context))
+                ((symbol-function 'kmode-require-tool)
+                 (lambda (tool observed-context)
+                   (push (list tool observed-context) required)
+                   (concat "/host/bin/" tool)))
+                ((symbol-function 'kmode-build--start)
+                 (lambda (&rest arguments)
+                   (push arguments started)
+                   'index-build)))
+        (should (eq (kmode-build-tags) 'index-build))
+        (should (equal (car started)
+                       (list "tags" '("TAGS") nil nil context
+                             #'kmode-build--tags-finished)))
+        (should (equal (car required) (list "etags" context)))
+        (setq required nil started nil)
+        (should (eq (kmode-build-cscope) 'index-build))
+        (should (equal (car started)
+                       (list "cscope" '("cscope") nil nil context
+                             #'kmode-build--cscope-finished)))
+        (should (equal (car required) (list "cscope" context)))))))
+
+(ert-deftest kmode-test/index-build-commands-stop-when-tools-are-missing ()
+  (unless (featurep 'kmode-build)
+    (ert-skip "kmode-build.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let ((context (kmode--make-context
+                    :root (file-name-as-directory root)
+                    :profile "index"
+                    :output (file-name-as-directory root)
+                    :compiler 'auto))
+          started)
+      (cl-letf (((symbol-function 'kmode-resolve-context)
+                 (lambda (&optional _root) context))
+                ((symbol-function 'kmode-require-tool)
+                 (lambda (tool _context)
+                   (user-error "missing %s" tool)))
+                ((symbol-function 'kmode-build--start)
+                 (lambda (&rest _arguments) (setq started t))))
+        (should-error (kmode-build-tags) :type 'user-error)
+        (should-not started)
+        (should-error (kmode-build-cscope) :type 'user-error)
+        (should-not started)))))
+
+(ert-deftest kmode-test/build-start-forwards-finish-callback ()
+  (unless (featurep 'kmode-build)
+    (ert-skip "kmode-build.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory (expand-file-name "output" root)))
+           (context (kmode--make-context
+                     :root root :profile "index" :output output
+                     :compiler 'auto))
+           (finish (lambda (_buffer _status) 'finished))
+           observed)
+      (make-directory output t)
+      (cl-letf (((symbol-function 'kmode-require-tool)
+                 (lambda (_tool _context) "/host/bin/make"))
+                ((symbol-function 'kmode-refresh-compile-command)
+                 (lambda (&optional _context) "make"))
+                ((symbol-function 'kmode-build-process-environment)
+                 (lambda (&optional _context) process-environment))
+                ((symbol-function 'kmode-start-command)
+                 (lambda (&rest arguments)
+                   (setq observed arguments)
+                   'build-buffer)))
+        (should (eq (kmode-build--start
+                     "tags" '("TAGS") nil nil context finish)
+                    'build-buffer)))
+      (should
+       (equal observed
+              (list "tags" "/host/bin/make"
+                    (list (concat "O=" (directory-file-name output)) "TAGS")
+                    root nil output context finish finish))))))
+
+(ert-deftest kmode-test/index-finish-callbacks-require-readable-artifacts ()
+  (unless (featurep 'kmode-build)
+    (ert-skip "kmode-build.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory
+                    (expand-file-name "index-output" root)))
+           (buffer (generate-new-buffer " *kmode-index-finish*"))
+           messages)
+      (make-directory output t)
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (setq-local kmode-process-root root)
+              (setq-local kmode-process-resource
+                          (kmode-process-resource-key output)))
+            (cl-letf (((symbol-function 'kmode-compilation-succeeded-p)
+                       (lambda (_buffer) t))
+                      ((symbol-function 'kmode-refresh-project-buffers)
+                       #'ignore)
+                      ((symbol-function 'kmode--refresh-tags-file-buffer)
+                       #'ignore)
+                      ((symbol-function 'message)
+                       (lambda (format-string &rest arguments)
+                         (push (apply #'format format-string arguments)
+                               messages))))
+              (kmode-build--tags-finished buffer "finished\n")
+              (kmode-build--cscope-finished buffer "finished\n")
+              (should-not
+               (seq-some (lambda (text)
+                           (string-match-p "index is ready\\|database is ready"
+                                           text))
+                         messages))
+              (should
+               (seq-some (lambda (text)
+                           (string-match-p "no readable index exists" text))
+                         messages))
+              (let ((stale (kmode-test--write-file output "cscope.out" "old")))
+                (set-file-times stale (seconds-to-time 1)))
+              (kmode-test--write-file output "cscope.files" "-k\n-q\n")
+              (kmode-build--cscope-finished buffer "finished\n")
+              (should-not
+               (seq-some (lambda (text)
+                           (string-match-p "cscope database is ready" text))
+                         messages))
+              (setq messages nil)
+              (kmode-test--write-file output "TAGS")
+              (kmode-test--write-file output "cscope.out" "current")
+              (kmode-build--tags-finished buffer "finished\n")
+              (kmode-build--cscope-finished buffer "finished\n")
+              (should
+               (seq-some (lambda (text)
+                           (string-match-p "TAGS index is ready" text))
+                         messages))
+              (should
+               (seq-some (lambda (text)
+                           (string-match-p "cscope database is ready" text))
+                         messages))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest kmode-test/tags-failed-finish-does-not-publish-partial-table ()
+  (unless (featurep 'kmode-build)
+    (ert-skip "TAGS integration is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory
+                    (expand-file-name "tags-output" root)))
+           (table (kmode-test--write-file output "TAGS" "partial\n"))
+           (buffer (generate-new-buffer " *kmode-tags-failed-build*"))
+           (file-refreshes 0)
+           (project-refreshes 0))
+      (unwind-protect
+          (progn
+            (with-current-buffer buffer
+              (setq-local kmode-process-root root)
+              (setq-local kmode-process-resource
+                          (kmode-process-resource-key output)))
+            (cl-letf (((symbol-function 'kmode-compilation-succeeded-p)
+                       (lambda (_buffer) nil))
+                      ((symbol-function 'kmode--refresh-tags-file-buffer)
+                       (lambda (_file) (cl-incf file-refreshes)))
+                      ((symbol-function 'kmode-refresh-project-buffers)
+                       (lambda (_root) (cl-incf project-refreshes))))
+              ;; A readable artifact from a failed build may be truncated.
+              (kmode-build--tags-finished buffer "exited abnormally\n")
+              (should (zerop file-refreshes))
+              (should (zerop project-refreshes))
+              ;; Once it disappears, active bindings must be invalidated.
+              (delete-file table)
+              (kmode-build--tags-finished buffer "exited abnormally\n")
+              (should (= file-refreshes 1))
+              (should (= project-refreshes 1))))
+        (when (buffer-live-p buffer)
+          (kill-buffer buffer))))))
+
+(ert-deftest kmode-test/tags-failed-finish-clears-disappeared-bindings ()
+  (unless (and (featurep 'kmode-build) (featurep 'kmode-emacs))
+    (ert-skip "TAGS integration is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory
+                    (expand-file-name "tags-output" root)))
+           (table (kmode-test--write-file output "TAGS"))
+           (source (generate-new-buffer " *kmode-tags-source*"))
+           (build (generate-new-buffer " *kmode-tags-build*"))
+           (kmode-set-compile-command nil)
+           (kmode-apply-kernel-c-style nil)
+           (kmode-auto-activate-tags t))
+      (unwind-protect
+          (progn
+            (with-current-buffer source
+              (setq default-directory root)
+              (setq-local kmode-output-directory output)
+              (setq-local tags-file-name nil)
+              (setq-local tags-table-list nil)
+              (kmode-mode 1)
+              (should (equal tags-file-name table))
+              (setq-local tags-completion-table '(stale-profile-cache)))
+            (delete-file table)
+            (with-current-buffer build
+              (setq-local kmode-process-root root)
+              (setq-local kmode-process-resource
+                          (kmode-process-resource-key output)))
+            (cl-letf (((symbol-function 'kmode-compilation-succeeded-p)
+                       (lambda (_buffer) nil)))
+              (kmode-build--tags-finished build "exited abnormally\n"))
+            (with-current-buffer source
+              (should-not tags-file-name)
+              (should-not tags-table-list)
+              (should-not tags-completion-table)))
+        (when (buffer-live-p source)
+          (with-current-buffer source
+            (when (bound-and-true-p kmode-mode)
+              (kmode-mode -1)))
+          (kill-buffer source))
+        (when (buffer-live-p build)
+          (kill-buffer build))))))
+
+(ert-deftest kmode-test/profile-switch-resets-etags-completion-cache ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "kmode-emacs.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output-a (file-name-as-directory (expand-file-name "index-a" root)))
+           (output-b (file-name-as-directory (expand-file-name "index-b" root)))
+           (table-a (kmode-test--write-file output-a "TAGS"))
+           (table-b (kmode-test--write-file output-b "TAGS"))
+           (kmode-profiles
+            `(("a" :compiler auto :output ,output-a)
+              ("b" :compiler auto :output ,output-b)))
+           (kmode-set-compile-command nil)
+           (kmode-apply-kernel-c-style nil)
+           (kmode-auto-activate-tags t))
+      (with-temp-buffer
+        (setq default-directory root)
+        (setq-local kmode-profile "a")
+        (setq-local tags-file-name "/user/original/TAGS")
+        (setq-local tags-table-list '("/user/original"))
+        (setq-local tags-completion-table '(user-cache))
+        (setq-local tags-table-computed-list '(user-computed))
+        (setq-local tags-table-computed-list-for '(user-for))
+        (setq-local tags-table-list-pointer '(user-pointer))
+        (setq-local tags-table-list-started-at '(user-start))
+        (setq-local tags-table-set-list '((user-set)))
+        (kmode-mode 1)
+        (should (equal tags-file-name table-a))
+        (should-not tags-completion-table)
+        (should-not tags-table-computed-list)
+        (should-not tags-table-computed-list-for)
+        (should-not tags-table-list-pointer)
+        (should-not tags-table-list-started-at)
+        (should-not tags-table-set-list)
+        (setq-local tags-completion-table '(profile-a-cache))
+        (setq-local tags-table-computed-list '(profile-a-computed))
+        (setq-local tags-table-set-list '((profile-a-set)))
+        (setq-local kmode-profile "b")
+        (kmode-refresh-tags-table)
+        (should (equal tags-file-name table-b))
+        (should-not tags-completion-table)
+        (should-not tags-table-computed-list)
+        (should-not tags-table-set-list)
+        (kmode-mode -1)
+        (should (equal tags-file-name "/user/original/TAGS"))
+        (should (equal tags-table-list '("/user/original")))
+        (should (equal tags-completion-table '(user-cache)))
+        (should (equal tags-table-computed-list '(user-computed)))
+        (should (equal tags-table-computed-list-for '(user-for)))
+        (should (equal tags-table-list-pointer '(user-pointer)))
+        (should (equal tags-table-list-started-at '(user-start)))
+        (should (equal tags-table-set-list '((user-set))))))))
+
+(ert-deftest kmode-test/tags-state-restores-identity-and-topology ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "TAGS integration is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory
+                    (expand-file-name "tags-output" root)))
+           (_table (kmode-test--write-file output "TAGS"))
+           (user-table-list (list "/user/one/TAGS" "/user/two/TAGS"))
+           (user-computed-list (list "/user/one/TAGS" "/user/two/TAGS"))
+           (user-pointer (cdr user-computed-list))
+           (user-set-list (list user-table-list user-computed-list))
+           (user-completion (list 'user-cache))
+           (kmode-set-compile-command nil)
+           (kmode-apply-kernel-c-style nil)
+           (kmode-auto-activate-tags t))
+      (with-temp-buffer
+        (setq default-directory root)
+        (setq-local kmode-output-directory output)
+        (setq-local tags-file-name (car user-table-list))
+        (setq-local tags-table-list user-table-list)
+        (setq-local tags-completion-table user-completion)
+        (setq-local tags-table-computed-list user-computed-list)
+        (setq-local tags-table-computed-list-for user-table-list)
+        (setq-local tags-table-list-pointer user-pointer)
+        (setq-local tags-table-list-started-at user-pointer)
+        (setq-local tags-table-set-list user-set-list)
+        (kmode-mode 1)
+        (kmode-mode -1)
+        (should (eq tags-file-name (car user-table-list)))
+        (should (eq tags-table-list user-table-list))
+        (should (eq tags-completion-table user-completion))
+        (should (eq tags-table-computed-list user-computed-list))
+        (should (eq tags-table-computed-list-for user-table-list))
+        (should (eq tags-table-list-pointer user-pointer))
+        (should (eq tags-table-list-started-at user-pointer))
+        (should (eq tags-table-list-pointer tags-table-list-started-at))
+        (should (eq tags-table-set-list user-set-list))
+        (should (eq (car tags-table-set-list) tags-table-list))
+        (should (eq (cadr tags-table-set-list)
+                    tags-table-computed-list))))))
+
+(ert-deftest kmode-test/tags-file-buffer-refresh-preserves-user-edits ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "TAGS integration is not present"))
+  (let* ((directory (make-temp-file "kmode-tags-buffer-" t))
+         (file (kmode-test--write-file directory "TAGS" "old\n"))
+         (buffer (find-file-noselect file)))
+    (unwind-protect
+        (progn
+          (kmode-test--write-file directory "TAGS" "new contents\n")
+          (kmode--refresh-tags-file-buffer file)
+          (with-current-buffer buffer
+            (should (equal (buffer-string) "new contents\n"))
+            (goto-char (point-max))
+            (insert "user edit\n"))
+          (kmode-test--write-file directory "TAGS" "disk changed again\n")
+          (kmode--refresh-tags-file-buffer file)
+          (should (buffer-live-p buffer))
+          (with-current-buffer buffer
+            (should (string-suffix-p "user edit\n" (buffer-string)))))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-directory directory t))))
+
+(ert-deftest kmode-test/tags-file-buffer-refresh-reinitializes-caches ()
+  (unless (featurep 'kmode-emacs)
+    (ert-skip "TAGS integration is not present"))
+  (let* ((directory (make-temp-file "kmode-tags-cache-" t))
+         (file (kmode-test--write-file
+                directory "TAGS" "\f\nold.c,0\n"))
+         (buffer (find-file-noselect file)))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (require 'etags)
+            (tags-table-mode)
+            (setq-local tags-table-files '(stale-file))
+            (setq-local tags-completion-table '(stale-completion))
+            (setq-local tags-included-tables '(stale-include)))
+          (kmode-test--write-file
+           directory "TAGS" "\f\na-much-longer-file-name.c,0\n")
+          (kmode--refresh-tags-file-buffer file)
+          (with-current-buffer buffer
+            (should (equal (buffer-string)
+                           "\f\na-much-longer-file-name.c,0\n"))
+            (should-not tags-table-files)
+            (should-not tags-completion-table)
+            (should-not tags-included-tables)))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (set-buffer-modified-p nil))
+        (kill-buffer buffer))
+      (delete-directory directory t))))
+
+(ert-deftest kmode-test/recompile-reinstalls-persistent-finish-callback ()
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (context (kmode--make-context
+                     :root root :profile "persistent" :output root
+                     :compiler 'auto))
+           (callback-count 0)
+           (callback (lambda (_buffer _status)
+                       (cl-incf callback-count)))
+           buffer)
+      (unwind-protect
+          (progn
+            (setq buffer
+                  (apply #'kmode-start-shell-command
+                         (list "persistent-callback" "true" root nil root
+                               context callback callback)))
+            (while (get-buffer-process buffer)
+              (accept-process-output nil 0.05))
+            (should (= callback-count 1))
+            (with-current-buffer buffer
+              (kmode-recompile))
+            (while (get-buffer-process buffer)
+              (accept-process-output nil 0.05))
+            (should (= callback-count 2)))
+        (when (buffer-live-p buffer)
+          (when-let ((process (get-buffer-process buffer)))
+            (delete-process process))
+          (kill-buffer buffer))))))
+
+(ert-deftest kmode-test/reused-job-clears-old-persistent-finish-callback ()
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (context (kmode--make-context
+                     :root root :profile "callback-clear" :output root
+                     :compiler 'auto))
+           (callback-count 0)
+           (callback (lambda (_buffer _status)
+                       (cl-incf callback-count)))
+           buffer)
+      (unwind-protect
+          (progn
+            (setq buffer
+                  (kmode-start-shell-command
+                   "callback-clear" "true" root nil root context
+                   callback callback))
+            (while (get-buffer-process buffer)
+              (accept-process-output nil 0.05))
+            (should (= callback-count 1))
+            (should
+             (eq buffer
+                 (kmode-start-shell-command
+                  "callback-clear" "true" root nil root context)))
+            (while (get-buffer-process buffer)
+              (accept-process-output nil 0.05))
+            (should (= callback-count 1))
+            (with-current-buffer buffer
+              (should-not kmode-process-finish-function)))
+        (when (buffer-live-p buffer)
+          (when-let ((process (get-buffer-process buffer)))
+            (delete-process process))
+          (kill-buffer buffer))))))
+
+(ert-deftest kmode-test/cscope-file-list-alone-is-not-query-ready ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "cscope integration is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let ((output (file-name-as-directory
+                   (expand-file-name "cscope-output" root))))
+      (kmode-test--write-file output "cscope.files" "-k\n-q\n")
+      (with-temp-buffer
+        (setq default-directory (file-name-as-directory root))
+        (setq-local kmode-output-directory output)
+        (cl-letf (((symbol-function 'locate-library)
+                   (lambda (_library) "/host/xcscope.el"))
+                  ((symbol-function 'kmode-tool-path)
+                   (lambda (tool &optional _context)
+                     (and (equal tool "cscope") "/host/bin/cscope"))))
+          (should-not (kmode-cscope-available-p)))))))
+
+(ert-deftest kmode-test/cscope-does-not-fallback-to-source-root ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "cscope integration is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory
+                    (expand-file-name "empty-profile-output" root)))
+           called)
+      (make-directory output t)
+      (kmode-test--write-file root "cscope.out")
+      (with-temp-buffer
+        (setq default-directory root)
+        (setq-local kmode-output-directory output)
+        (cl-letf (((symbol-function 'locate-library)
+                   (lambda (_library) "/host/xcscope.el"))
+                  ((symbol-function 'kmode-tool-path)
+                   (lambda (tool &optional _context)
+                     (and (equal tool "cscope") "/host/bin/cscope")))
+                  ((symbol-function 'kmode-require-tool)
+                   (lambda (_tool _context) "/host/bin/cscope"))
+                  ((symbol-function 'require)
+                   (lambda (&rest _arguments) t))
+                  ((symbol-function 'cscope-find-global-definition)
+                   (lambda () (interactive) (setq called t))))
+          (should-not (kmode-cscope-available-p))
+          (should-error (kmode-cscope-find-definition) :type 'user-error)))
+      (should-not called))))
+
+(ert-deftest kmode-test/xcscope-wrappers-delegate-profile-local-state ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "kmode-navigate.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory
+                    (expand-file-name "cscope-output" root)))
+           (_database (kmode-test--write-file output "cscope.out"))
+           (cscope-output-buffer-name
+            (generate-new-buffer-name " *kmode-cscope-state*"))
+           (cscope-result-separator "================================\n")
+           (cscope-process nil)
+           (kmode-test--enable-subr-trampolines nil)
+           (cscope-program "outer-program")
+           (cscope-initial-directory "/outer/database")
+           (cscope-option-kernel-mode nil)
+           (cscope-database-regexps '((".*" ("/outer/mapped"))))
+           (cscope-database-file "outer.out")
+           (cscope-index-file "outer.files")
+           (cscope-option-do-not-update-database nil)
+           (cscope-option-include-directories '("/outer/include"))
+           (cscope-option-other '("--outer-option"))
+           (cscope-option-disable-compression t)
+           (cscope-option-use-inverted-index nil)
+           observed)
+      (with-temp-buffer
+        (setq default-directory root)
+        (setq-local kmode-output-directory output)
+        (cl-letf (((symbol-function 'kmode-require-tool)
+                   (lambda (tool _context)
+                     (should (equal tool "cscope"))
+                     "/host/bin/cscope"))
+                  ((symbol-function 'require)
+                   (lambda (&rest _arguments) t))
+                  ((symbol-function 'cscope-find-global-definition)
+                   (lambda ()
+                     (interactive)
+                     (setq observed
+                           (list cscope-program cscope-initial-directory
+                                 cscope-option-kernel-mode
+                                 cscope-database-regexps
+                                 cscope-database-file cscope-index-file
+                                 cscope-option-do-not-update-database
+                                 cscope-option-other
+                                 cscope-option-include-directories
+                                 cscope-option-disable-compression
+                                 cscope-option-use-inverted-index
+                                 default-directory))))
+                  ((symbol-function 'cscope-find-this-symbol)
+                   (lambda ()
+                     (interactive)
+                     (error "simulated xcscope failure"))))
+          (kmode-cscope-find-definition)
+          (should-error (kmode-cscope-find-symbol) :type 'error)))
+      (should
+       (equal observed
+              (list "/host/bin/cscope" (directory-file-name output)
+                    t nil "cscope.out" "cscope.files" t nil nil nil nil root)))
+      (should (equal cscope-program "outer-program"))
+      (should (equal cscope-initial-directory "/outer/database"))
+      (should-not cscope-option-kernel-mode)
+      (should (equal cscope-database-regexps
+                     '((".*" ("/outer/mapped")))))
+      (should (equal cscope-database-file "outer.out"))
+      (should (equal cscope-index-file "outer.files"))
+      (should-not cscope-option-do-not-update-database)
+      (should (equal cscope-option-other '("--outer-option")))
+      (should (equal cscope-option-include-directories '("/outer/include")))
+      (should cscope-option-disable-compression)
+      (should-not cscope-option-use-inverted-index)
+      (when-let ((buffer (get-buffer cscope-output-buffer-name)))
+        (kill-buffer buffer)))))
+
+(ert-deftest kmode-test/xcscope-result-rerun-retains-only-its-profile-state ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "kmode-navigate.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory
+                    (expand-file-name "rerun-cscope-output" root)))
+           (_database (kmode-test--write-file output "cscope.out"))
+           (_inverted-in (kmode-test--write-file output "cscope.in.out"))
+           (_inverted-postings
+            (kmode-test--write-file output "cscope.po.out"))
+           (cscope-output-buffer-name
+            (generate-new-buffer-name " *kmode-cscope-rerun*"))
+           (result-buffer (get-buffer-create cscope-output-buffer-name))
+           (cscope-result-separator "================================\n")
+           (cscope-process nil)
+           (cscope-program "outer-program")
+           (cscope-initial-directory "/outer/database")
+           (cscope-option-kernel-mode nil)
+           (cscope-database-regexps '((".*" (("/outer/mapped")))))
+           (cscope-database-file "outer.out")
+           (cscope-index-file "outer.files")
+           (cscope-option-do-not-update-database nil)
+           (cscope-option-include-directories '("/outer/include"))
+           (cscope-option-other '("--outer-option"))
+           (cscope-option-disable-compression t)
+           (cscope-option-use-inverted-index nil)
+           old-beginning new-beginning launch-observed rerun-observed)
+      (unwind-protect
+          (progn
+            ;; Pre-existing native xcscope buffer locals must survive a Kmode
+            ;; launch, and its older result must not receive Kmode state.
+            (with-current-buffer result-buffer
+              (setq-local cscope-program "buffer-program")
+              (setq-local cscope-option-include-directories
+                          '("/buffer/include"))
+              (setq old-beginning (point))
+              (insert cscope-result-separator "old result\n")
+              (put-text-property
+               old-beginning (1+ old-beginning) 'cscope-stored-search
+               '(cscope-find-global-definition "old")))
+            (with-temp-buffer
+              (setq default-directory root)
+              (setq-local kmode-output-directory output)
+              (cl-letf
+                  (((symbol-function 'kmode-require-tool)
+                    (lambda (_tool _context) "/profile/bin/cscope"))
+                   ((symbol-function 'require)
+                    (lambda (&rest _arguments) t))
+                   ((symbol-function 'cscope-find-global-definition)
+                    (lambda (&optional symbol)
+                      (interactive)
+                      (with-current-buffer result-buffer
+                        (let ((observed
+                               (list cscope-program
+                                     cscope-initial-directory
+                                     cscope-option-do-not-update-database
+                                     cscope-option-include-directories
+                                     cscope-option-kernel-mode
+                                     cscope-option-other
+                                     cscope-option-disable-compression
+                                     cscope-option-use-inverted-index
+                                     cscope-database-regexps
+                                     cscope-database-file
+                                     cscope-index-file)))
+                          (if symbol
+                              (setq rerun-observed observed)
+                            (setq launch-observed observed)))
+                        (setq new-beginning (point-max))
+                        (goto-char (point-max))
+                        (insert cscope-result-separator "new result\n")
+                        (put-text-property
+                         new-beginning (1+ new-beginning)
+                         'cscope-stored-search
+                         `(cscope-find-global-definition
+                           ,(or symbol "needle")))))))
+                (kmode-cscope-find-definition)))
+            (let ((expected
+                   (list "/profile/bin/cscope"
+                         (directory-file-name output)
+                         t nil t nil nil t nil
+                         "cscope.out" "cscope.files")))
+              (should (equal launch-observed expected))
+              (with-current-buffer result-buffer
+                (should (equal cscope-program "buffer-program"))
+                (should (equal cscope-option-include-directories
+                               '("/buffer/include")))
+                (should
+                 (equal (get-text-property
+                         old-beginning 'cscope-stored-search)
+                        '(cscope-find-global-definition "old")))
+                (goto-char new-beginning)
+                (let ((stored (get-text-property
+                               new-beginning 'cscope-stored-search)))
+                  (should (eq (car stored) 'kmode--xcscope-rerun))
+                  ;; This mirrors native xcscope's `r': delete the selected
+                  ;; result, leave point at its beginning, and eval its
+                  ;; cscope-stored-search form.
+                  (delete-region new-beginning (point-max))
+                  (goto-char new-beginning)
+                  (cl-letf
+                      (((symbol-function 'cscope-find-global-definition)
+                        (lambda (&optional symbol)
+                          (with-current-buffer result-buffer
+                            (setq rerun-observed
+                                  (list
+                                   cscope-program
+                                   cscope-initial-directory
+                                   cscope-option-do-not-update-database
+                                   cscope-option-include-directories
+                                   cscope-option-kernel-mode
+                                   cscope-option-other
+                                   cscope-option-disable-compression
+                                   cscope-option-use-inverted-index
+                                   cscope-database-regexps
+                                   cscope-database-file
+                                   cscope-index-file))
+                            (setq new-beginning (point-max))
+                            (goto-char (point-max))
+                            (insert cscope-result-separator "new result\n")
+                            (put-text-property
+                             new-beginning (1+ new-beginning)
+                             'cscope-stored-search
+                             `(cscope-find-global-definition
+                               ,(or symbol "needle")))))))
+                    (eval stored))
+                  (should (equal rerun-observed expected))
+                  (should
+                   (eq (car (get-text-property
+                             new-beginning 'cscope-stored-search))
+                       'kmode--xcscope-rerun))))
+              (should (equal cscope-program "outer-program"))
+              (should (equal cscope-option-include-directories
+                             '("/outer/include")))))
+        (when (buffer-live-p result-buffer)
+          (kill-buffer result-buffer))))))
+
+(ert-deftest kmode-test/xcscope-wrapper-rejects-missing-profile-database ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "kmode-navigate.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory
+                    (expand-file-name "empty-cscope-output" root)))
+           (kmode-test--enable-subr-trampolines nil)
+           called)
+      (make-directory output t)
+      (with-temp-buffer
+        (setq default-directory root)
+        (setq-local kmode-output-directory output)
+        (cl-letf (((symbol-function 'kmode-require-tool)
+                   (lambda (_tool _context) "/host/bin/cscope"))
+                  ((symbol-function 'require)
+                   (lambda (&rest _arguments) t))
+                  ((symbol-function
+                    'cscope-find-functions-calling-this-function)
+                   (lambda () (interactive) (setq called t))))
+          (should-error (kmode-cscope-find-callers) :type 'user-error)))
+      (should-not called))))
+
+(ert-deftest kmode-test/cscope-inverted-index-needs-both-companions ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "cscope integration is not present"))
+  (let ((directory (make-temp-file "kmode-cscope-index-" t)))
+    (unwind-protect
+        (progn
+          (should-not (kmode--cscope-inverted-index-p directory))
+          (kmode-test--write-file directory "cscope.in.out")
+          (should-not (kmode--cscope-inverted-index-p directory))
+          (kmode-test--write-file directory "cscope.po.out")
+          (should (kmode--cscope-inverted-index-p directory)))
+      (delete-directory directory t))))
+
+(ert-deftest kmode-test/clangd-command-composes-profile-and-user-arguments ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "kmode-navigate.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory
+                    (expand-file-name "clangd-output" root)))
+           (_database
+            (kmode-test--write-file output "compile_commands.json" "[]\n"))
+           (kmode-test--enable-subr-trampolines nil)
+           (kmode-clangd-arguments
+            '("--background-index" "--header-insertion=never"
+              "--query-driver=/opt/cross-*"))
+           started)
+      (with-temp-buffer
+        (c-mode)
+        (setq default-directory root)
+        (setq-local kmode-output-directory output)
+        (setq-local eglot-server-programs
+                    '((c-mode . ("old-clangd"))
+                      (python-mode . ("pylsp"))))
+        (cl-letf (((symbol-function 'kmode-require-tool)
+                   (lambda (tool _context)
+                     (should (equal tool "clangd"))
+                     "/host/bin/clangd"))
+                  ((symbol-function 'require)
+                   (lambda (&rest _arguments) t))
+                  ((symbol-function 'eglot-ensure)
+                   (lambda () (setq started t))))
+          (kmode-eglot-ensure))
+        (should started)
+        (should
+         (equal (cdr (assq 'c-mode eglot-server-programs))
+                (list "/host/bin/clangd"
+                      (concat "--compile-commands-dir="
+                              (directory-file-name output))
+                      "--background-index" "--header-insertion=never"
+                      "--query-driver=/opt/cross-*")))
+        (should (equal (cdr (assq 'python-mode eglot-server-programs))
+                       '("pylsp")))
+        (should (= (cl-count 'c-mode eglot-server-programs
+                             :key #'car :test #'eq)
+                   1))))))
+
+(ert-deftest kmode-test/clangd-setup-preserves-inherited-server-alist ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "kmode-navigate.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((root (file-name-as-directory root))
+           (output (file-name-as-directory
+                    (expand-file-name "clangd-output" root)))
+           (_database
+            (kmode-test--write-file output "compile_commands.json" "[]\n"))
+           (inherited '((python-mode . ("pylsp"))
+                        (c-mode . ("global-clangd"))
+                        (rust-mode . ("rust-analyzer"))))
+           (original (copy-tree inherited))
+           (eglot-server-programs inherited)
+           (kmode-test--enable-subr-trampolines nil)
+           started)
+      (with-temp-buffer
+        (c-mode)
+        (setq default-directory root)
+        (setq-local kmode-output-directory output)
+        (should-not (local-variable-p 'eglot-server-programs))
+        (cl-letf (((symbol-function 'kmode-require-tool)
+                   (lambda (tool _context)
+                     (should (equal tool "clangd"))
+                     "/host/bin/clangd"))
+                  ((symbol-function 'require)
+                   (lambda (&rest _arguments) t))
+                  ((symbol-function 'eglot-ensure)
+                   (lambda () (setq started t))))
+          (kmode-eglot-ensure))
+        (should started)
+        (should (local-variable-p 'eglot-server-programs))
+        (should
+         (equal (mapcar #'car eglot-server-programs)
+                '(c-mode python-mode rust-mode))))
+      (should (equal inherited original)))))
+
+(ert-deftest kmode-test/index-navigation-keymaps-actions-and-wrappers ()
+  (unless (and (featurep 'kmode-emacs)
+               (featurep 'kmode-build)
+               (featurep 'kmode-navigate))
+    (ert-skip "index navigation integration is not present"))
+  (should (eq (lookup-key kmode-navigation-map (kbd "t"))
+              'kmode-build-tags))
+  (should (eq (lookup-key kmode-navigation-map (kbd "C"))
+              kmode-cscope-map))
+  (dolist (binding '(("b" . kmode-build-cscope)
+                     ("d" . kmode-cscope-find-definition)
+                     ("r" . kmode-cscope-find-callers)
+                     ("c" . kmode-cscope-find-callees)
+                     ("s" . kmode-cscope-find-symbol)
+                     ("t" . kmode-cscope-find-text)
+                     ("i" . kmode-cscope-find-includers)))
+    (should (eq (lookup-key kmode-cscope-map (kbd (car binding)))
+                (cdr binding))))
+  (dolist (entry '((kmode-build-tags kmode-build-tags)
+                   (kmode-build-cscope kmode-build-cscope)
+                   (cscope-definition kmode-cscope-find-definition)
+                   (cscope-callers kmode-cscope-find-callers)
+                   (cscope-callees kmode-cscope-find-callees)))
+    (let ((action
+           (seq-find (lambda (candidate)
+                       (eq (kmode-action-id candidate) (car entry)))
+                     (kmode-actions t))))
+      (should action)
+      (should (eq (kmode-action-command action) (cadr entry)))
+      (should (equal (kmode-action-group action) "Navigate"))))
+  (let (delegated)
+    (cl-letf (((symbol-function 'kmode--call-xcscope)
+               (lambda (command) (push command delegated))))
+      (dolist (command '(kmode-cscope-find-symbol
+                         kmode-cscope-find-definition
+                         kmode-cscope-find-callers
+                         kmode-cscope-find-callees
+                         kmode-cscope-find-text
+                         kmode-cscope-find-includers))
+        (call-interactively command)))
+    (should
+     (equal (nreverse delegated)
+            '(cscope-find-this-symbol
+              cscope-find-global-definition
+              cscope-find-functions-calling-this-function
+              cscope-find-called-functions
+              cscope-find-this-text-string
+              cscope-find-files-including-file)))))
 
 (ert-deftest kmode-test/compilation-reinitialization-preserves-ownership ()
   (with-temp-buffer

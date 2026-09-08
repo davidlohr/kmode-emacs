@@ -20,6 +20,10 @@
 (require 'subr-x)
 (require 'kmode-core)
 
+(declare-function kmode-refresh-project-buffers "kmode-emacs"
+                  (&optional root))
+(declare-function kmode--refresh-tags-file-buffer "kmode-emacs" (file))
+
 (defgroup kmode-build nil
   "Profile-aware Linux kernel build commands."
   :group 'kmode
@@ -55,8 +59,11 @@ needed for the requested target."
   "Environment variables removed from profile-managed build processes.
 
 These variables can otherwise override the architecture, toolchain, output,
-configuration, or Make behavior represented by a kmode-emacs context.  Put an
-intentional override in a profile's `:make-arguments' instead."
+configuration, or Make behavior represented by a kmode-emacs context.
+Represent managed architecture, toolchain, and output choices through profile
+properties.  Use trusted `:make-arguments' only for other intentional Make
+settings; `O' and `KBUILD_OUTPUT' assignments are rejected there because
+`:output' owns the build directory."
   :type '(repeat string)
   :group 'kmode-build)
 
@@ -138,6 +145,23 @@ checkout."
      value)
    values))
 
+(defun kmode-build--profile-make-arguments (values purpose)
+  "Validate configured Make argument VALUES used for PURPOSE.
+
+The profile output is a managed resource.  Callers must express it through
+the context's `:output' property, never by replacing Kbuild's output selector."
+  (let ((arguments (kmode-build--strings values purpose))
+        (case-fold-search nil))
+    (dolist (argument arguments)
+      (when (string-match-p
+             (concat "\\`[[:space:]]*\\(?:O\\|KBUILD_OUTPUT\\)"
+                     "[[:space:]]*[+:?!]*=")
+             argument)
+        (user-error
+         "%s cannot override managed output with %S; use profile :output"
+         purpose argument)))
+    arguments))
+
 (defun kmode-build--target (target)
   "Validate and return kernel Makefile TARGET.
 
@@ -175,9 +199,12 @@ command."
          (compiler (kmode-context-compiler context))
          (jobs (kmode-context-jobs context))
          (profile-arguments
-          (kmode-build--strings (or (kmode-context-make-arguments context)
-                                     nil)
-                                 "Profile make arguments")))
+          (kmode-build--profile-make-arguments
+           (or (kmode-context-make-arguments context) nil)
+           "Profile make arguments"))
+         (extra-arguments (kmode-build--profile-make-arguments
+                           (or extra-arguments nil)
+                           "Extra make arguments")))
     (unless (and (stringp root) (file-name-absolute-p root))
       (user-error "Kernel context has an invalid source root: %S" root))
     (unless (and (stringp output) (file-name-absolute-p output))
@@ -201,8 +228,7 @@ command."
      (unless (kmode-build--same-directory-p root output)
        (list (concat "O=" (directory-file-name output))))
      profile-arguments
-     (kmode-build--strings (or extra-arguments nil)
-                            "Extra make arguments")
+     extra-arguments
      (kmode-build--targets (or targets nil)))))
 
 (defun kmode-build-command (&optional context targets extra-arguments)
@@ -225,12 +251,14 @@ and safely quotes every process argument."
     nil))
 
 (defun kmode-build--start
-    (label targets &optional extra-arguments mode context)
+    (label targets &optional extra-arguments mode context finish-function)
   "Start a kernel build named LABEL for TARGETS.
 
 EXTRA-ARGUMENTS are additional make arguments.  MODE, when non-nil, is
 forwarded to `kmode-start-command'.  CONTEXT defaults to the current
-resolved context and can pin a previously confirmed operation."
+resolved context and can pin a previously confirmed operation.
+FINISH-FUNCTION receives the Compilation buffer and status after the
+process exits and is retained by `kmode-recompile'."
   (let* ((context (or context (kmode-resolve-context)))
          (program (kmode-require-tool kmode-build-make-program context))
          (arguments
@@ -239,7 +267,8 @@ resolved context and can pin a previously confirmed operation."
     (let ((process-environment (kmode-build-process-environment context)))
       (kmode-start-command label program arguments
                             (kmode-context-root context) mode
-                            (kmode-context-output context) context))))
+                            (kmode-context-output context) context
+                            finish-function finish-function))))
 
 (defun kmode-build--start-comint (label targets &optional extra-arguments)
   "Start an interactive kernel build named LABEL for TARGETS.
@@ -403,6 +432,83 @@ interface can receive input."
   (interactive)
   (kmode-build--start "compile-commands" '("compile_commands.json")))
 
+(defun kmode-build--index-context (buffer)
+  "Return BUFFER's root and output directories as a cons cell."
+  (when (buffer-live-p buffer)
+    (let ((root (or (buffer-local-value 'kmode-process-root buffer)
+                    (with-current-buffer buffer (kmode-root t))))
+          (output (buffer-local-value 'kmode-process-resource buffer)))
+      (and root (cons root (or output root))))))
+
+(defun kmode-build--readable-index-p (file)
+  "Return non-nil when FILE is a readable regular index artifact."
+  (and (file-regular-p file) (file-readable-p file)))
+
+(defun kmode-build--tags-finished (buffer _status)
+  "Refresh kernel buffers after a TAGS build in BUFFER finishes."
+  (when-let ((context (kmode-build--index-context buffer)))
+    (let* ((file (expand-file-name "TAGS" (cdr context)))
+           (succeeded (kmode-compilation-succeeded-p buffer))
+           (readable (kmode-build--readable-index-p file)))
+      ;; A failed make can leave a truncated but readable TAGS file.  Keep the
+      ;; last in-memory table in that case; only clear bindings when it is gone.
+      (when (or succeeded (not readable))
+        (when (fboundp 'kmode--refresh-tags-file-buffer)
+          (kmode--refresh-tags-file-buffer file))
+        (when (fboundp 'kmode-refresh-project-buffers)
+          (kmode-refresh-project-buffers (car context))))
+      (when succeeded
+        (if readable
+            (message "Kmode-emacs TAGS index is ready: %s"
+                     (abbreviate-file-name file))
+          (message
+           "Kmode-emacs TAGS build finished, but no readable index exists: %s"
+           (abbreviate-file-name file)))))))
+
+(defun kmode-build--fresh-cscope-database-p (output)
+  "Return non-nil when OUTPUT has a cscope database for its current file list."
+  (let ((database (expand-file-name "cscope.out" output))
+        (file-list (expand-file-name "cscope.files" output)))
+    (and (kmode-build--readable-index-p database)
+         (kmode-build--readable-index-p file-list)
+         ;; The kernel rewrites cscope.files before invoking cscope.  If the
+         ;; old database predates that list, the refresh did not complete.
+         (not (file-newer-than-file-p file-list database)))))
+
+(defun kmode-build--cscope-finished (buffer _status)
+  "Report the cscope database path after a successful build in BUFFER."
+  (when-let ((context (kmode-build--index-context buffer)))
+    (let ((file (expand-file-name "cscope.out" (cdr context))))
+      (when (kmode-compilation-succeeded-p buffer)
+        (if (kmode-build--fresh-cscope-database-p (cdr context))
+            (message "Kmode-emacs cscope database is ready: %s"
+                     (abbreviate-file-name file))
+          (message
+           "Kmode-emacs cscope build finished, but no readable database exists: %s"
+           (abbreviate-file-name file)))))))
+
+;;;###autoload
+(defun kmode-build-tags ()
+  "Generate a kernel-aware TAGS table for the active build profile.
+
+This invokes the kernel's own `make TAGS' target, whose `scripts/tags.sh'
+understands kernel macros and generated constructs better than a generic
+recursive Etags invocation."
+  (interactive)
+  (let ((context (kmode-resolve-context)))
+    (kmode-require-tool "etags" context)
+    (kmode-build--start "tags" '("TAGS") nil nil context
+                        #'kmode-build--tags-finished)))
+
+;;;###autoload
+(defun kmode-build-cscope ()
+  "Generate a kernel-aware cscope database for the active build profile."
+  (interactive)
+  (let ((context (kmode-resolve-context)))
+    (kmode-require-tool "cscope" context)
+    (kmode-build--start "cscope" '("cscope") nil nil context
+                        #'kmode-build--cscope-finished)))
+
 ;;;###autoload
 (defun kmode-build-sparse (&optional level)
   "Run the kernel sparse checker asynchronously at LEVEL.
@@ -459,6 +565,16 @@ prompt for checking level 1 or 2."
              (kmode-tool-path "sparse" context)))
     (error nil)))
 
+(defun kmode-build-index-available-p (tool)
+  "Return non-nil when the active tree can build an index using TOOL."
+  (condition-case nil
+      (let* ((root (kmode-root t))
+             (context (and root (kmode-resolve-context root))))
+        (and context
+             (kmode-build-available-p)
+             (kmode-tool-path tool context)))
+    (error nil)))
+
 (kmode-register-action
  'kmode-build "Build kernel" "Build" #'kmode-build
  :predicate #'kmode-build-available-p
@@ -490,6 +606,15 @@ prompt for checking level 1 or 2."
  #'kmode-build-compile-commands
  :predicate #'kmode-build-available-p
  :description "Generate compile_commands.json for language tooling")
+(kmode-register-action
+ 'kmode-build-tags "Generate/refresh TAGS" "Navigate" #'kmode-build-tags
+ :predicate (lambda () (kmode-build-index-available-p "etags"))
+ :description "Build a profile-aware Etags index with the kernel's tags script")
+(kmode-register-action
+ 'kmode-build-cscope "Generate/refresh cscope" "Navigate"
+ #'kmode-build-cscope
+ :predicate (lambda () (kmode-build-index-available-p "cscope"))
+ :description "Build a profile-aware cscope database with the kernel's tags script")
 (kmode-register-action
  'kmode-build-defconfig "Generate defconfig" "Configure"
  #'kmode-build-defconfig

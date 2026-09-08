@@ -8,8 +8,8 @@ kernel logs, QEMU, virtme-ng, and GDB while keeping the external commands
 visible and reproducible.
 
 `kmode-emacs` is pre-1.0.  Its public Lisp commands use the `kmode-` prefix.
-This checkout has a top-level project minor mode and
-globalized auto-enable mode, but there is not yet a packaged release or stable
+This checkout has a top-level project minor mode and a global launcher/auto-enable
+mode, but there is not yet a packaged release or stable
 compatibility promise.  This README labels future work as **planned**; command
 tables describe only code present in the repository.
 
@@ -36,19 +36,22 @@ definition and caller shortcuts, and a first virtme-ng build/run/debug loop.
 The shortest first session is:
 
 1. Load `kmode-emacs` and enable `kmode-global-mode`.
-2. Open a file below a Linux tree containing `Makefile`, `Kconfig`,
-   `MAINTAINERS`, and `scripts/checkpatch.pl`.
-3. Select an out-of-tree build profile with `C-c k p`.
-4. Run the capability doctor with `C-c k ?`, then open the dashboard with
-   `C-c k k`.
+2. Press `C-c k k` from any ordinary buffer.  In a kernel buffer this opens
+   that worktree; elsewhere it reuses the last valid session root, tries
+   `kmode-default-root`, or prompts for a tree containing `Makefile`, `Kconfig`,
+   `MAINTAINERS`, and `scripts/checkpatch.pl`.  Use `C-u C-c k k` to choose another tree.
+3. In the dashboard, press `p` to select an out-of-tree build profile and `d`
+   to run the capability doctor.
+4. Open any source file below that tree for the buffer-local editing cockpit,
+   semantic navigation, and current-file actions.
 5. Build the current object with `C-c k o`; the built-in default profile is a
    native **in-tree** build, so configure `:output` first if that is not what
    you want.
 
 For code navigation, `M-.` / `C-c k n d` finds an implementation, `M-?` /
 `C-c k n r` finds references or callers, and `M-,` / `C-c k n b` returns.
-Generate the selected profile's compile database and start clangd with
-`C-c k n e` for semantic results.
+Generate the selected profile's compile database with
+`M-x kmode-build-compile-commands`, then start clangd with `C-c k n e`.
 
 Documentation map:
 
@@ -74,8 +77,10 @@ Documentation map:
   and `compile_commands.json`.
 - Optional Kbuild analysis front ends for extra warning levels, Smatch,
   report-only Coccinelle, the kernel Clang analyzer, and checkstack.
-- Kernel-aware include, Kconfig, Kbuild, source/header, Documentation, Xref,
-  and Eglot/clangd navigation, with a dedicated `C-c k n` shortcut map.
+- Kernel-aware include, Kconfig, Kbuild, source/header, and Documentation
+  navigation; profile-aware TAGS and cscope generation; standard Xref;
+  optional xcscope definition/call-graph/search commands; and Eglot/clangd
+  integration under a dedicated `C-c k n` shortcut map.
 - `checkpatch.pl`, `get_maintainer.pl`, `git range-diff`, patch export, and an
   advisory pre-submission flight check.  Nothing sends mail.
 - Opt-in asynchronous Flymake diagnostics for unsaved C, assembly, and Rust
@@ -94,14 +99,18 @@ Documentation map:
   guest status.
 - Active-profile and worktree-wide live-process discovery, worktree-wide
   cancellation, and distinct live-job counts in the dashboard.
-- A project-scoped minor mode, `C-c k` command map with navigation and
-  virtme-ng submaps, Linux C style, synchronized `compile-command`, Emacs
-  Project integration, and a Kconfig major mode.
+- A global `C-c k` launcher while `kmode-global-mode` is enabled, plus a
+  project-scoped minor mode with navigation and virtme-ng submaps, the
+  complete kernel-documented CC Mode offset table and 80-column fill target,
+  synchronized `compile-command`, Emacs Project integration, and a Kconfig
+  major mode.
 - ERT, byte-compilation, and Checkdoc checks via `make check`.
 
-`kmode-mode` installs only its buffer-local `C-c k` prefix.  The optional
-`kmode-global-mode` enables it automatically in recognized kernel-tree
-buffers.
+`kmode-global-mode` keeps the `C-c k` prefix available throughout Emacs and
+automatically enables `kmode-mode` in recognized kernel-tree file buffers.
+The local mode alone applies editing policy: the `K[profile]` lighter, Linux C
+style, trailing-whitespace visibility, final-newline policy, and profile-owned
+compile command do not leak into unrelated buffers.
 
 ## Requirements and graceful degradation
 
@@ -114,6 +123,9 @@ libraries shipped with Emacs.  External capabilities are independent:
 | Fast file and Kconfig lookup | `rg` | Kconfig lookup and file discovery use slower Emacs fallbacks where implemented |
 | Semantic C navigation | Eglot and `clangd` | Xref/grep/include/Kconfig navigation remains available |
 | Review/live checks | executable tree-local `scripts/checkpatch.pl`, `scripts/get_maintainer.pl`, and Git as applicable | Only the affected actions fail or disappear |
+| Kernel TAGS generation | `make`, Etags, and a tree whose Makefile supports `TAGS` | Missing executables make generation unavailable; an absent target fails visibly in Compilation; other navigation remains available |
+| Kernel cscope generation | `make`, `cscope`, and a tree whose Makefile supports `cscope` | Missing executables make generation unavailable; an absent target fails visibly in Compilation; an existing database remains queryable when the adapter requirements are met |
+| xcscope adapter | Optional `xcscope.el`, `cscope`, and a profile database | Dedicated Kmode cscope commands are unavailable; all other navigation remains usable |
 | Sparse | `sparse` | `kmode-build-sparse` reports the missing executable |
 | Extra warnings | Kbuild | Runs without an extra analyzer executable |
 | Smatch | `smatch` | Only the Smatch action is unavailable |
@@ -128,6 +140,11 @@ libraries shipped with Emacs.  External capabilities are independent:
 | Stack decoding | tree-local `scripts/decode_stacktrace.sh` and matching `vmlinux` | Raw log viewing remains usable |
 | Local log streaming | configured `kmode-dmesg-command` (defaults to `dmesg`) | Saved log files can still be opened |
 
+For TAGS and cscope, action availability resolves `make` and the corresponding
+index tool; it does not pre-detect whether the current kernel Makefile provides
+the requested target.  An unsupported `TAGS` or `cscope` target therefore
+fails visibly in its Compilation buffer without removing an existing index.
+
 Bare executable names are resolved only through Emacs's `exec-path`.  An
 absolute name or a name with a directory component is treated as an explicit
 path; relative explicit paths resolve from the kernel source root.  Explicit
@@ -141,6 +158,45 @@ tool shims.
 No current command requires Magit, Notmuch, b4, Transient, or Dape.  Those are
 possible future adapters, not hidden dependencies.
 
+### Editor integrations and prior art
+
+Kmode-emacs builds on Emacs facilities instead of replacing a user's editor
+stack.  The current integration boundary is explicit:
+
+| Facility | Current behavior |
+| --- | --- |
+| CC Mode | In `c-mode`, Kmode layers the kernel documentation's complete offset table—including tab-only argument-list continuation and closing—on the built-in `linux` style.  It sets an 80-column fill target by default and restores prior local values on disable.  `kmode-kernel-fill-column`, `kmode-show-trailing-whitespace`, and `kmode-require-final-newline` control the corresponding buffer-local policy. |
+| TAGS/Etags | `kmode-build-tags` (`C-c k n t`) runs the kernel's `TAGS` target for the selected profile.  When `kmode-auto-activate-tags` is non-nil (the default), Kmode activates a readable table from that profile's output in kernel buffers.  It does not pretend that Etags references are semantic callers. |
+| Eglot/clangd | `kmode-eglot-ensure` uses the selected profile's explicit compilation-database directory.  `kmode-clangd-arguments` defaults to background indexing, detailed completion, and disabled header insertion; `--clang-tidy` remains an explicit opt-in. |
+| xcscope | `kmode-build-cscope` runs the kernel's `make cscope` target.  If `xcscope.el`, `cscope`, and a profile database are available, the `C-c k n C` adapter binds the resolved program, database directory, and kernel mode only for each call.  Kmode never globally configures xcscope. |
+| consult-cscope | Not owned or invoked by Kmode.  Existing user configuration remains independent. |
+| TRAMP | Remote editing and remote process execution are not currently supported or tested.  Do not assume that a locally resolved build profile is safe for a TRAMP checkout. |
+| diff-hl/git-gutter | Kmode neither enables nor configures a diff gutter.  These remain user-owned UI choices. |
+
+The argument-list mapping is intentional and exact: `arglist-close` uses the
+kernel tab-stop lineup; `arglist-cont-nonempty` tries CC Mode's GCC-asm lineup
+and then the same tab-stop lineup; and `arglist-intro` uses one basic offset.
+
+The policy is additive: optional adapters must be feature-detected, must not
+take over standard `M-.`/`M-?`/`M-,` bindings or global UI modes, and must
+degrade without disabling unrelated Kmode workflows.  Kmode-owned TAGS and
+cscope generation remains explicit and runs as visible, cancellable Compilation
+jobs.  clangd background indexing starts only after an explicit
+`kmode-eglot-ensure`; it is then owned by Eglot/clangd rather than Kmode's job
+manager.
+
+Useful prior art includes Javier Martinez Canillas's
+[cscope, TAGS, and Linux-style Emacs setup](https://blog.dowhile0.org/2011/07/04/emacs-configuration-for-linux-kernel-development/),
+the devkernel.io guide's
+[Doom Emacs, consult-cscope, LSP, and gutter setup](https://devkernel.io/posts/kernel-dev-setup-editor/),
+Donald Hunter's
+[Eglot/clangd-over-TRAMP workflow](https://donaldh.wtf/2025/02/kernel-development-in-emacs/),
+and coldnew's
+[`linux-kernel-coding-style.el`](https://github.com/coldnew/linux-kernel-coding-style.el).
+They are references, not dependencies or claims of feature parity.  The
+normative indentation source is the kernel's own
+[coding-style documentation](https://docs.kernel.org/process/coding-style.html).
+
 ## Installation
 
 Clone the public repository into a stable directory:
@@ -150,7 +206,7 @@ git clone https://github.com/davidlohr/kmode-emacs.git
 ```
 
 Add that checkout to `load-path`, load the top-level module, and optionally
-enable automatic activation:
+enable its global launcher and automatic project activation:
 
 ```elisp
 (add-to-list 'load-path "/path/to/kmode-emacs")
@@ -158,25 +214,49 @@ enable automatic activation:
 (kmode-global-mode 1)
 ```
 
-To opt in one buffer instead, run `M-x kmode-mode` from inside a recognized
-kernel tree.  `kmode-mode` applies the built-in Linux style in C buffers,
-keeps the buffer-local `compile-command` synchronized by default, and remaps
-the standard `compile` command to the profile-owned `kmode-compile`.
-Customize `kmode-apply-kernel-c-style` or `kmode-set-compile-command` to
-disable styling or synchronization, respectively.  Disabling the mode
-restores the local values it changed.
+After updating the checkout, restart Emacs.  Re-evaluating
+`(require 'kmode-emacs)` does not reload an already provided feature or rebuild its keymaps.
 
-The built-in prefix is:
+With `kmode-global-mode` enabled, `C-c k` is available in ordinary buffers and
+the local `kmode-mode` is enabled automatically only for files below a
+recognized kernel root.  To opt in one kernel buffer without the global
+launcher, omit the final line and run `M-x kmode-mode` there.
+
+The local mode applies the kernel CC Mode style in C buffers, keeps the
+buffer-local `compile-command` synchronized by default, and remaps the
+standard `compile` command to the profile-owned `kmode-compile`.  Customize
+`kmode-apply-kernel-c-style`, `kmode-kernel-fill-column`,
+`kmode-show-trailing-whitespace`, `kmode-require-final-newline`, or
+`kmode-set-compile-command` to adjust their values.  The first customization
+is the master switch for the C-buffer editing policy; the individual style
+values are applied only when it is enabled in a supported C mode.  Set
+`kmode-default-root` to a kernel root (or a directory below one) if the global
+launcher should prefer it before prompting.  Disabling the mode restores the
+local values it changed.
+
+The built-in prefix is shown below.  `C-c k k` is the entry point outside a
+kernel buffer: it uses the current root when one exists, otherwise reuses the
+last valid root selected during this Emacs session, then tries a valid
+`kmode-default-root`, and finally prompts.  A prefix argument
+(`C-u C-c k k`) always prompts.  `C-c k R` selects and remembers another
+root without opening the dashboard.  These are the only two outside-tree entry
+points.  With `kmode-global-mode` enabled, run every other `C-c k` command from
+a kernel buffer or from the dashboard, whose buffer carries the selected root
+and profile context.  With only local `kmode-mode`, use the prefix in kernel
+buffers and the dashboard's buttons plus `g`, `p`, and `d` after switching to
+the dashboard.
 
 | Key | Command |
 | --- | --- |
 | `C-c k k` | `kmode-dashboard` |
 | `C-c k SPC` | `kmode-dispatch` |
 | `C-c k ?` | `kmode-doctor` |
+| `C-c k R` | `kmode-select-root` |
 | `C-c k p` | `kmode-select-profile` |
 | `C-c k x` | `kmode-cancel-job` |
 | `C-c k b` / `o` | `kmode-build` / `kmode-build-current-object` |
 | `C-c k n` | Kernel navigation prefix map |
+| `C-c k n C` | Optional profile-aware xcscope prefix map |
 | `C-c k v` | virtme-ng build/run/debug prefix map |
 | `C-c k d` / `c` / `h` | DWIM navigation / find Kconfig / source-header toggle |
 | `C-c k r` / `f` | checkpatch current file / toggle live checkpatch diagnostics |
@@ -198,7 +278,59 @@ The navigation map is:
 | `C-c k n u` | `kmode-grep-config-users` |
 | `C-c k n h` | `kmode-toggle-header-source` |
 | `C-c k n D` | `kmode-grep-documentation` |
+| `C-c k n t` | `kmode-build-tags` |
+| `C-c k n C` | Optional xcscope prefix map |
 | `C-c k n e` | `kmode-eglot-ensure` |
+
+The optional xcscope map is:
+
+| Key | Command |
+| --- | --- |
+| `C-c k n C b` | `kmode-build-cscope` |
+| `C-c k n C d` | `kmode-cscope-find-definition` |
+| `C-c k n C r` | `kmode-cscope-find-callers` |
+| `C-c k n C c` | `kmode-cscope-find-callees` |
+| `C-c k n C s` | `kmode-cscope-find-symbol` |
+| `C-c k n C t` | `kmode-cscope-find-text` |
+| `C-c k n C i` | `kmode-cscope-find-includers` |
+
+Building the database needs `cscope`; querying it also needs `xcscope.el`.
+These dependencies are detected at use time and are not required to load
+Kmode.  consult-cscope remains independently configured and is not called by
+this map.
+
+### Where symbol databases are stored
+
+Project-side index data follows the selected profile's output directory:
+
+| Data | Location |
+| --- | --- |
+| Kernel TAGS | `<profile-output>/TAGS` |
+| Kernel cscope database | `<profile-output>/cscope.files`, `<profile-output>/cscope.out`, and cscope auxiliary files beside them |
+| Clang compilation database | `<profile-output>/compile_commands.json` |
+| clangd project shards | `<profile-output>/.cache/clangd/index/` |
+
+The built-in `default` profile is an in-tree profile, so its
+`<profile-output>` is the kernel root and these paths appear directly below
+that root.  `kmode-build-tags`, `kmode-build-cscope`, and
+`kmode-build-compile-commands` create the first three entries explicitly.
+clangd creates its `*.idx` shards after `kmode-eglot-ensure` starts it with
+background indexing.  Shards for external headers that have no compilation
+database live under `clangd/index/` in the operating system's user-cache
+directory, not the kernel profile.  See clangd's official
+[index design](https://clangd.llvm.org/design/indexing.html).
+
+Kmode rejects `O=` and `KBUILD_OUTPUT=` in profile and per-call Make arguments;
+use the profile's `:output` property instead.  This keeps process locking,
+generation, dashboard status, and navigation pinned to the same directory.
+
+The dashboard and Doctor inspect six primary active-profile paths:
+`.config`, `compile_commands.json`, the `.cache/clangd/index/` directory,
+`TAGS`, `cscope.out`, and `vmlinux`.  The dashboard renders a readable path as
+`ready · YYYY-MM-DD HH:MM` and any other path as `missing`; Doctor renders
+`[OK]` or `[--]` with the path.  These are readability checks, not content or
+freshness validation.  Neither view enumerates cscope's auxiliary files or
+clangd's individual cache shards.
 
 The virtme-ng map is:
 
@@ -216,7 +348,9 @@ The virtme-ng map is:
 | `C-c k v x` | `kmode-vng-stop` |
 | `C-c k v s` | `kmode-vng-show-commands` |
 
-Only use process-running features in kernel trees and with profiles you trust.
+Only run process features against kernel trees and profiles you trust.  A
+dashboard launched elsewhere is still pinned to the root and profile it
+displays.
 Tree-local scripts, generated compiler commands, profile Make arguments, test
 runners, QEMU command vectors, and virtme-ng profile/default options can all
 execute code, expose host resources, or change build/runtime state.
@@ -444,21 +578,27 @@ All names in this section are implemented in the current checkout.
 | Command | Purpose |
 | --- | --- |
 | `kmode-mode` | Enable/disable the buffer-local kernel cockpit, style, prefix, and compile command |
-| `kmode-global-mode` | Auto-enable `kmode-mode` in buffers under recognized kernel trees |
-| `kmode-dashboard` | Open the worktree flight deck with Git/profile/artifact state and every registered action |
+| `kmode-global-mode` | Make `C-c k` globally available and auto-enable `kmode-mode` in buffers under recognized kernel trees |
+| `kmode-dashboard` | Open the current/remembered/configured worktree flight deck, prompting for a root when needed; a prefix always prompts |
+| `kmode-select-root` | Prompt for a root (or directory below it), validate it, and remember the normalized root for this session |
 | `kmode-dashboard-refresh` | Refresh the current dashboard (`g` in its buffer) |
 | `kmode-dashboard-select-profile` | Select a worktree profile from the dashboard (`p` in its buffer) |
 | `kmode-dashboard-doctor` | Run the capability doctor from the dashboard (`d` in its buffer) |
-| `kmode-dispatch` | Choose an available action with completion; a prefix includes unavailable actions |
-| `kmode-doctor` | Report selected tools and profile artifacts with remediation text |
+| `kmode-dispatch` | Choose an available action with completion in the current kernel/dashboard context; a prefix includes unavailable actions |
+| `kmode-doctor` | Report selected tools and profile artifacts from the current kernel/dashboard context with remediation text |
 | `kmode-cancel-job` | Select and interrupt a live kmode-emacs process from any profile in the current worktree |
-| `kmode-refresh-project-buffers` | Recompute profile-derived compile commands in enabled buffers of the worktree |
+| `kmode-refresh-project-buffers` | Refresh profile-derived compile commands and TAGS bindings in enabled buffers of the worktree |
 | `kmode-kconfig-mode` | Major mode automatically selected for `Kconfig` and `Kconfig.*` files |
 | `kmode-kconfig-follow-source` | Follow the `source`/`rsource` family with root/containing-file bases and `ARCH`/`SRCARCH` expansion |
 
-The dashboard reports timestamps, not freshness: `ready` means an artifact is
-readable.  Doctor is a snapshot of selected executables and files, not a build
-configuration validator.  `kmode-kconfig-mode` provides font lock,
+The dashboard checks the active profile's `.config`,
+`compile_commands.json`, `.cache/clangd/index/` directory, `TAGS`,
+`cscope.out`, and `vmlinux`.  A readable path is shown as
+`ready · YYYY-MM-DD HH:MM`; another path is `missing`.  Doctor checks the same
+six paths with `[OK]`/`[--]` and their locations.  Both are readability checks:
+neither validates contents or freshness, lists cscope auxiliary files or clangd
+shards, or proves the kernel configuration.  Doctor also reports Etags, cscope,
+xcscope.el, clangd, and the other selected executables.  `kmode-kconfig-mode` provides font lock,
 eight-column `TAB` indentation through `kmode-kconfig-indent-line`, Imenu,
 `C-c C-o` source following, and `M-.` Kconfig symbol lookup.  Following rejects
 unresolved variables and targets outside the source tree (including symlink
@@ -488,9 +628,11 @@ Kbuild.
 
 Every Make argv is derived from the same context.  Managed build/test launches
 remove ambient architecture, toolchain, output/configuration, compiler, and
-Make-control variables that could override that context; intentional
-overrides belong in trusted profile arguments.  User-entered Make targets are
-deliberately restricted.  Resource-bearing jobs that resolve to the same
+Make-control variables that could override that context.  Trusted profile
+arguments can tune other Make behavior, but `O=` and `KBUILD_OUTPUT=` are
+rejected there and in per-call arguments; configure `:output` instead.
+User-entered Make targets are deliberately restricted.  Resource-bearing jobs
+that resolve to the same
 canonical output directory cannot overlap.  Generation of
 `compile_commands.json` may cause substantial kernel build work, and the
 current code does not fingerprint or detect a stale database.
@@ -526,20 +668,52 @@ checkstack requires a matching built `vmlinux`.
 | `kmode-toggle-header-source` | Choose a same-basename source/header candidate |
 | `kmode-find-kbuild` | Visit the nearest ancestor `Kbuild` or `Makefile` |
 | `kmode-grep-documentation` | Search the tree's `Documentation/` |
-| `kmode-eglot-ensure` | Start Eglot/clangd with `<profile-output>/compile_commands.json` |
+| `kmode-eglot-ensure` | Start Eglot/clangd with `<profile-output>/compile_commands.json` and `kmode-clangd-arguments` |
+| `kmode-build-tags` | Run the kernel `TAGS` target and activate the selected profile's resulting table when configured |
+| `kmode-refresh-tags-table` | Refresh this buffer's profile-local TAGS binding according to `kmode-auto-activate-tags` |
+| `kmode-build-cscope` | Run the kernel `cscope` target for the selected profile |
+| `kmode-cscope-find-definition` | Find a global definition through the optional profile-scoped xcscope adapter |
+| `kmode-cscope-find-callers` | Find functions calling the function at point through xcscope |
+| `kmode-cscope-find-callees` | Find functions called by the function at point through xcscope |
+| `kmode-cscope-find-symbol` | Find a symbol through xcscope |
+| `kmode-cscope-find-text` | Find text through xcscope |
+| `kmode-cscope-find-includers` | Find files including the file at point through xcscope |
 
 The standard Xref keys remain available: `M-.` finds a definition, `M-?`
 finds references/call sites, and `M-,` goes back.  `C-c k n d`, `C-c k n r`,
 and `C-c k n b` are explicit kernel-prefix aliases for those same workflows.
+`C-c k n t` builds the kernel `TAGS` table in the selected profile's output.
+With `kmode-auto-activate-tags` enabled, a readable profile table is bound
+buffer-locally for standard Xref/Etags use; Kmode does not rebuild it on buffer
+activation or claim that a textual Etags reference is a semantic caller.
+`M-x kmode-refresh-tags-table` reapplies that binding policy in the current
+buffer after an externally created or removed table.  Selecting a profile
+refreshes both compile-command and TAGS state in enabled buffers throughout the
+worktree.
+
+`C-c k n C b` similarly invokes the kernel's `make cscope` target, always for
+the selected profile output.  Dashboard and Doctor likewise inspect only
+`<profile-output>/cscope.out`.  The other `C-c k n C` commands require that
+exact readable database; `cscope.files` alone is only an input list and is not
+query-ready.  Kmode pins xcscope to the selected output, the standard database
+names, query-only mode, the resolved program, and kernel mode dynamically for
+that call, then restores the user's settings.  It never falls back to a source
+tree database for an out-of-tree profile.  consult-cscope is not configured or
+invoked.
 
 Include and source/header commands are path/basename heuristics, not a C
 preprocessor or Kbuild dependency analysis.  Source/header results are capped
 by `kmode-navigation-file-limit` (24 by default).
 
 When `kmode-stop-eglot-on-profile-change` is non-nil (the default), selecting
-a worktree profile shuts down Eglot servers found in file buffers
-under that root.  Restart explicitly with `kmode-eglot-ensure`; kmode-emacs does
-not silently attach the new profile to an old clangd index.
+a worktree profile shuts down Eglot servers found in file buffers under that
+root.  Restart explicitly with `kmode-eglot-ensure`; kmode-emacs does not
+silently attach the new profile to an old clangd index.
+
+`kmode-clangd-arguments` defaults to `--background-index`,
+`--completion-style=detailed`, and `--header-insertion=never`.  Add
+`--clang-tidy` only when its indexing cost and diagnostic policy fit the
+worktree; Kmode deliberately leaves it off by default.
 
 ### Review and patch preparation
 
@@ -679,11 +853,11 @@ and config/HOME/trust inputs, refusing changed state.  An automatic post-build
 guest opens in its buffer without selecting it, so a long build finishing does
 not steal editor focus.
 
-Neither `vng` nor its `virtme-ng` alias is installed in the development
-environment used for this implementation, so no actual vng kernel build,
-guest boot, GDB attachment, or dump was run here.  Real virtualization remains
-an explicit integration smoke test; the absence of vng does not affect the
-other kmode-emacs workflows.
+The hermetic suite validates vng argument construction, safety checks, locks,
+and process ownership without booting a VM.  Treat the first build, guest boot,
+GDB attachment, and dump on each installed virtme-ng/kernel combination as
+explicit integration smoke tests; their availability does not affect other
+Kmode workflows.
 
 ### Runtime, logs, and debugging
 

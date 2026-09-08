@@ -18,6 +18,7 @@
 ;;; Code:
 
 (require 'easymenu)
+(require 'etags)
 (require 'kmode-core)
 (require 'kmode-build)
 (require 'kmode-analyze)
@@ -31,11 +32,24 @@
 (require 'kmode-kconfig)
 (require 'kmode-ui)
 
+(declare-function c-langelem-pos "cc-engine" (langelem))
+(declare-function c-langelem-2nd-pos "cc-engine" (langelem))
+(declare-function initialize-new-tags-table "etags" ())
+
+(defvar c-basic-offset)
+(defvar c-syntactic-element)
+(defvar tags-completion-table)
+(defvar tags-table-computed-list)
+(defvar tags-table-computed-list-for)
+(defvar tags-table-list-pointer)
+(defvar tags-table-list-started-at)
+(defvar tags-table-set-list)
+
 (defconst kmode-version "0.1.0"
   "Current kmode-emacs package version.")
 
 (defcustom kmode-apply-kernel-c-style t
-  "Apply the built-in Linux C style in kmode-emacs C buffers."
+  "Apply the Linux kernel's documented CC Mode style in C buffers."
   :type 'boolean
   :group 'kmode)
 
@@ -44,19 +58,49 @@
   :type 'boolean
   :group 'kmode)
 
+(defcustom kmode-auto-activate-tags t
+  "Use an active profile's existing TAGS table in kmode-emacs buffers.
+
+The binding is buffer-local, does not displace Eglot, and is restored when
+`kmode-mode' is disabled.  Generate the table with `kmode-build-tags'."
+  :type 'boolean
+  :group 'kmode)
+
+(defcustom kmode-kernel-fill-column 80
+  "Preferred fill column in kernel C buffers managed by kmode-emacs."
+  :type 'integer
+  :group 'kmode)
+
+(defcustom kmode-show-trailing-whitespace t
+  "Show trailing whitespace in kernel C buffers managed by kmode-emacs."
+  :type 'boolean
+  :group 'kmode)
+
+(defcustom kmode-require-final-newline t
+  "Require a final newline in kernel C buffers managed by kmode-emacs."
+  :type 'boolean
+  :group 'kmode)
+
 (defvar-local kmode--saved-locals nil
   "Local variable values saved before `kmode-mode' changed them.")
 
-(defun kmode--save-local (variable)
-  "Remember VARIABLE's current binding for mode teardown."
+(defun kmode--save-local (variable &optional preserve-identity)
+  "Remember VARIABLE's current binding for mode teardown.
+
+When PRESERVE-IDENTITY is non-nil, retain the exact value object so related
+variables which share list structure are restored with that topology intact."
   (unless (assq variable kmode--saved-locals)
     (push (list variable (local-variable-p variable)
-                (and (boundp variable) (symbol-value variable)))
+                (and (boundp variable)
+                     (let ((value (symbol-value variable)))
+                       (if preserve-identity value (copy-tree value)))))
           kmode--saved-locals)))
 
-(defun kmode--set-local (variable value)
-  "Save VARIABLE and then bind it locally to VALUE."
-  (kmode--save-local variable)
+(defun kmode--set-local (variable value &optional preserve-identity)
+  "Save VARIABLE and then bind it locally to VALUE.
+
+PRESERVE-IDENTITY is forwarded to `kmode--save-local'."
+  (kmode--save-local variable preserve-identity)
   (set (make-local-variable variable) value))
 
 (defun kmode--restore-locals ()
@@ -75,6 +119,40 @@
   (or (derived-mode-p 'c-mode)
       (derived-mode-p 'c-ts-mode)))
 
+(defun kmode--c-lineup-arglist-tabs-only (_ignored)
+  "Return a tab-stop argument-list offset for the current C construct."
+  (let* ((anchor (c-langelem-pos c-syntactic-element))
+         (column (c-langelem-2nd-pos c-syntactic-element))
+         (offset (- (1+ column) anchor))
+         (steps (floor offset c-basic-offset)))
+    (* (max steps 1) c-basic-offset)))
+
+(defconst kmode--kernel-c-offsets
+  '((arglist-close . kmode--c-lineup-arglist-tabs-only)
+    (arglist-cont-nonempty
+     c-lineup-gcc-asm-reg kmode--c-lineup-arglist-tabs-only)
+    (arglist-intro . +)
+    (brace-list-intro . +)
+    (c . c-lineup-C-comments)
+    (case-label . 0)
+    (comment-intro . c-lineup-comment)
+    (cpp-define-intro . +)
+    (cpp-macro . -1000)
+    (cpp-macro-cont . +)
+    (defun-block-intro . +)
+    (else-clause . 0)
+    (func-decl-cont . +)
+    (inclass . +)
+    (inher-cont . c-lineup-multi-inher)
+    (knr-argdecl-intro . 0)
+    (label . -1000)
+    (statement . 0)
+    (statement-block-intro . +)
+    (statement-case-intro . +)
+    (statement-cont . +)
+    (substatement . +))
+  "CC Mode offsets from the Linux kernel's editor guidance.")
+
 (defun kmode--apply-style ()
   "Apply kernel indentation without changing global C settings."
   (when (and kmode-apply-kernel-c-style (kmode--c-buffer-p))
@@ -83,26 +161,103 @@
                        (and (boundp 'c-style-variables)
                             (symbol-value 'c-style-variables))
                        '(indent-tabs-mode tab-width c-basic-offset
+                         c-label-minimum-indentation fill-column
+                         show-trailing-whitespace require-final-newline
                          c-ts-mode-indent-offset c-indentation-style)))
       (when (boundp variable)
         (kmode--save-local variable)))
     (kmode--set-local 'indent-tabs-mode t)
     (kmode--set-local 'tab-width 8)
+    (kmode--set-local 'fill-column kmode-kernel-fill-column)
+    (kmode--set-local 'show-trailing-whitespace
+                      kmode-show-trailing-whitespace)
+    (kmode--set-local 'require-final-newline kmode-require-final-newline)
     (cond
      ((derived-mode-p 'c-mode)
       (c-set-style "linux")
-      (setq-local c-basic-offset 8))
+      (setq-local c-basic-offset 8)
+      (setq-local c-label-minimum-indentation 0)
+      (dolist (offset kmode--kernel-c-offsets)
+        (c-set-offset (car offset) (cdr offset))))
      ((boundp 'c-ts-mode-indent-offset)
       (setq-local c-ts-mode-indent-offset 8)))))
 
-(defun kmode-refresh-project-buffers ()
-  "Refresh profile-derived state in every kmode-emacs buffer in this worktree."
+(defun kmode-tags-file (&optional context)
+  "Return the readable TAGS file for CONTEXT's profile, or nil."
+  (let* ((context (or context (kmode-resolve-context)))
+         (file (expand-file-name "TAGS" (kmode-context-output context))))
+    (and (file-regular-p file) (file-readable-p file) file)))
+
+(defun kmode--refresh-tags-file-buffer (file)
+  "Refresh an unmodified buffer visiting generated TAGS FILE.
+
+Kill the unmodified visiting buffer when FILE no longer exists.  Never
+discard user modifications."
+  (when-let ((buffer (get-file-buffer file)))
+    (with-current-buffer buffer
+      (unless (buffer-modified-p)
+        (if (and (file-regular-p file) (file-readable-p file))
+            (unless (verify-visited-file-modtime buffer)
+              (revert-buffer t t)
+              (require 'etags)
+              (initialize-new-tags-table))
+          (kill-buffer buffer))))))
+
+(defconst kmode--tags-traversal-variables
+  '(tags-completion-table
+    tags-table-computed-list
+    tags-table-computed-list-for
+    tags-table-list-pointer
+    tags-table-list-started-at
+    tags-table-set-list)
+  "Etags search state which must not leak between build profiles.")
+
+(defun kmode--reset-tags-traversal-state ()
+  "Save and clear this buffer's Etags traversal state."
+  (dolist (variable kmode--tags-traversal-variables)
+    (kmode--set-local variable nil t)))
+
+(defun kmode-refresh-tags-table (&optional context)
+  "Refresh this buffer's profile-local TAGS binding from CONTEXT.
+
+When the active profile has no table, retain an unrelated user binding unless
+kmode-emacs previously installed one in this buffer."
   (interactive)
-  (let ((root (kmode-root)))
+  (let ((file (and kmode-auto-activate-tags
+                   (kmode-tags-file context))))
+    (cond
+     (file
+      (kmode--refresh-tags-file-buffer file)
+      (kmode--set-local 'tags-file-name file t)
+      (kmode--set-local 'tags-table-list nil t)
+      (kmode--reset-tags-traversal-state))
+     ((or (assq 'tags-file-name kmode--saved-locals)
+          (assq 'tags-table-list kmode--saved-locals)
+          (cl-some (lambda (variable)
+                     (assq variable kmode--saved-locals))
+                   kmode--tags-traversal-variables))
+      (kmode--set-local 'tags-file-name nil t)
+      (kmode--set-local 'tags-table-list nil t)
+      (kmode--reset-tags-traversal-state)))
+    (when (called-interactively-p 'interactive)
+      (if file
+          (message "Kmode-emacs TAGS table: %s"
+                   (abbreviate-file-name file))
+        (message
+         "No TAGS table for the active profile; run kmode-build-tags")))
+    file))
+
+(defun kmode-refresh-project-buffers (&optional root)
+  "Refresh profile-derived state in kmode-emacs buffers below ROOT.
+
+ROOT defaults to the current kernel worktree."
+  (interactive)
+  (let ((root (or root (kmode-root))))
     (dolist (buffer (buffer-list))
       (with-current-buffer buffer
         (when (and (bound-and-true-p kmode-mode)
                    (equal root (kmode-root t)))
+          (kmode-refresh-tags-table)
           (when (and kmode-set-compile-command
                      (kmode-tool-path kmode-build-make-program))
             (kmode--save-local 'compile-command)
@@ -115,6 +270,18 @@
   (condition-case nil
       (format " K[%s]" (kmode-current-profile-name (kmode-root t)))
     (error " K")))
+
+(defvar kmode-cscope-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "b") #'kmode-build-cscope)
+    (define-key map (kbd "d") #'kmode-cscope-find-definition)
+    (define-key map (kbd "r") #'kmode-cscope-find-callers)
+    (define-key map (kbd "c") #'kmode-cscope-find-callees)
+    (define-key map (kbd "s") #'kmode-cscope-find-symbol)
+    (define-key map (kbd "t") #'kmode-cscope-find-text)
+    (define-key map (kbd "i") #'kmode-cscope-find-includers)
+    map)
+  "Prefix map for the optional xcscope navigation adapter.")
 
 (defvar kmode-navigation-map
   (let ((map (make-sparse-keymap)))
@@ -129,6 +296,8 @@
     (define-key map (kbd "h") #'kmode-toggle-header-source)
     (define-key map (kbd "D") #'kmode-grep-documentation)
     (define-key map (kbd "e") #'kmode-eglot-ensure)
+    (define-key map (kbd "t") #'kmode-build-tags)
+    (define-key map (kbd "C") kmode-cscope-map)
     map)
   "Prefix map for definitions, callers, and kernel-aware navigation.")
 
@@ -151,6 +320,7 @@
 (defvar kmode-command-map
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd "k") #'kmode-dashboard)
+    (define-key map (kbd "R") #'kmode-select-root)
     (define-key map (kbd "SPC") #'kmode-dispatch)
     (define-key map (kbd "?") #'kmode-doctor)
     (define-key map (kbd "x") #'kmode-cancel-job)
@@ -173,6 +343,15 @@
     (define-key map (kbd "g") #'kmode-gdb-attach)
     map)
   "Prefix keymap for kernel development commands.")
+
+(defvar kmode-global-mode-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd "C-c k") kmode-command-map)
+    map)
+  "Keymap active while `kmode-global-mode' is enabled.
+
+This exposes the kmode-emacs command prefix in every buffer without
+installing a permanent binding in `global-map'.")
 
 (defvar kmode-mode-map
   (let ((map (make-sparse-keymap)))
@@ -211,6 +390,15 @@
     ["Navigation back" kmode-navigation-back t]
     ["Find CONFIG symbol" kmode-find-config t]
     ["Toggle source/header" kmode-toggle-header-source buffer-file-name]
+    ["Generate/refresh TAGS" kmode-build-tags t]
+    ("Cscope (optional)"
+     ["Generate/refresh database" kmode-build-cscope t]
+     ["Find definition" kmode-cscope-find-definition t]
+     ["Find callers" kmode-cscope-find-callers t]
+     ["Find callees" kmode-cscope-find-callees t]
+     ["Find symbol" kmode-cscope-find-symbol t]
+     ["Find text" kmode-cscope-find-text t]
+     ["Find includers" kmode-cscope-find-includers t])
     "---"
     ["Checkpatch file" kmode-checkpatch-file buffer-file-name]
     ["Toggle live checkpatch" kmode-checkpatch-flymake-mode
@@ -237,8 +425,9 @@ All commands resolve through the selected worktree build profile."
   (if kmode-mode
       (condition-case error-data
           (progn
-            (kmode-root)
+            (setq kmode--last-root (kmode-root))
             (kmode--apply-style)
+            (kmode-refresh-tags-table)
             (when (and kmode-set-compile-command
                        (kmode-tool-path kmode-build-make-program))
               (kmode--save-local 'compile-command)
@@ -259,6 +448,7 @@ All commands resolve through the selected worktree build profile."
 ;;;###autoload
 (define-globalized-minor-mode kmode-global-mode
   kmode-mode kmode--maybe-enable
+  :keymap kmode-global-mode-map
   :group 'kmode)
 
 (defun kmode-project-find (directory)

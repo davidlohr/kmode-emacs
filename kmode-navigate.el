@@ -23,6 +23,29 @@
 (declare-function eglot-ensure "eglot")
 (declare-function eglot-current-server "eglot")
 (declare-function eglot-shutdown "eglot" (server))
+(declare-function cscope-find-this-symbol "xcscope" (symbol))
+(declare-function cscope-find-global-definition "xcscope" (symbol))
+(declare-function cscope-find-functions-calling-this-function
+                  "xcscope" (symbol))
+(declare-function cscope-find-called-functions "xcscope" (symbol))
+(declare-function cscope-find-this-text-string "xcscope" (symbol))
+(declare-function cscope-find-files-including-file "xcscope" (symbol))
+(declare-function cscope-get-history-bounds-this-result "xcscope" (which))
+
+(defvar cscope-database-file)
+(defvar cscope-database-regexps)
+(defvar cscope-initial-directory)
+(defvar cscope-index-file)
+(defvar cscope-option-disable-compression)
+(defvar cscope-option-do-not-update-database)
+(defvar cscope-option-include-directories)
+(defvar cscope-option-kernel-mode)
+(defvar cscope-option-other)
+(defvar cscope-option-use-inverted-index)
+(defvar cscope-output-buffer-name)
+(defvar cscope-process)
+(defvar cscope-program)
+(defvar cscope-result-separator)
 
 (defcustom kmode-stop-eglot-on-profile-change t
   "Stop kernel Eglot servers when the active build profile changes.
@@ -36,6 +59,18 @@ restarting them explicit through `kmode-eglot-ensure'."
 (defcustom kmode-navigation-file-limit 24
   "Maximum number of source/header matches offered without narrowing."
   :type 'integer
+  :group 'kmode)
+
+(defcustom kmode-clangd-arguments
+  '("--background-index"
+    "--completion-style=detailed"
+    "--header-insertion=never")
+  "Extra arguments passed to clangd after the active database directory.
+
+The defaults keep a persistent semantic index, improve completion detail, and
+prevent clangd from inserting unsuitable kernel headers automatically.  Add
+`--clang-tidy' here when that cost and diagnostic policy suit your workflow."
+  :type '(repeat string)
   :group 'kmode)
 
 (defun kmode--line-include ()
@@ -309,6 +344,180 @@ provide a broader textual result set."
      ;; newer Emacsen mark this compatibility command obsolete.
      (intern "xref-pop-marker-stack"))))
 
+(defun kmode--cscope-database-directory (context)
+  "Return CONTEXT's output directory when its cscope database is readable."
+  (let* ((output (kmode-context-output context))
+         (database (expand-file-name "cscope.out" output)))
+    (and (file-regular-p database)
+         (file-readable-p database)
+         output)))
+
+(defun kmode--cscope-inverted-index-p (directory)
+  "Return non-nil when DIRECTORY has both cscope inverted-index files."
+  (seq-every-p
+   (lambda (name)
+     (let ((file (expand-file-name name directory)))
+       (and (file-regular-p file) (file-readable-p file))))
+   '("cscope.in.out" "cscope.po.out")))
+
+(defun kmode-cscope-available-p ()
+  "Return non-nil when xcscope and a profile-local database are usable."
+  (condition-case nil
+      (let* ((root (kmode-root t))
+             (context (and root (kmode-resolve-context root))))
+        (and context
+             (locate-library "xcscope")
+             (kmode-tool-path "cscope" context)
+             (kmode--cscope-database-directory context)))
+    (error nil)))
+
+(defun kmode--xcscope-profile-state (program directory)
+  "Return xcscope bindings for PROGRAM and profile output DIRECTORY."
+  `((cscope-database-file . "cscope.out")
+    (cscope-database-regexps . nil)
+    (cscope-index-file . "cscope.files")
+    (cscope-program . ,program)
+    (cscope-initial-directory . ,(directory-file-name directory))
+    (cscope-option-disable-compression . nil)
+    (cscope-option-do-not-update-database . t)
+    (cscope-option-include-directories . nil)
+    (cscope-option-kernel-mode . t)
+    (cscope-option-other . nil)
+    (cscope-option-use-inverted-index
+     . ,(kmode--cscope-inverted-index-p directory))))
+
+(defun kmode--with-xcscope-buffer-state (buffer state function)
+  "Call FUNCTION while BUFFER has the xcscope bindings in STATE.
+
+Every prior buffer-local value is restored, including the absence of a local
+binding.  This prevents a kmode-emacs query from changing how a later,
+ordinary xcscope query behaves."
+  (let ((saved
+         (with-current-buffer buffer
+           (mapcar (lambda (binding)
+                     (let ((variable (car binding)))
+                       (list variable
+                             (local-variable-p variable)
+                             (symbol-value variable))))
+                   state))))
+    (unwind-protect
+        (progn
+          (with-current-buffer buffer
+            (dolist (binding state)
+              (set (make-local-variable (car binding)) (cdr binding))))
+          (funcall function))
+      (when (buffer-live-p buffer)
+        (with-current-buffer buffer
+          (dolist (binding saved)
+            (if (nth 1 binding)
+                (set (car binding) (nth 2 binding))
+              (kill-local-variable (car binding)))))))))
+
+(defun kmode--protect-xcscope-result-rerun
+    (buffer start state &optional exact)
+  "Make the xcscope result in BUFFER after START rerun with STATE.
+
+When EXACT is non-nil, START itself must begin the result separator.  The
+profile state is embedded only in that result's stored search form, so other
+results and later non-kmode xcscope searches remain untouched."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (save-excursion
+        (goto-char (min start (point-max)))
+        (let ((beginning
+               (if exact
+                   (and (looking-at cscope-result-separator) (point))
+                 (when (re-search-forward
+                        (concat "^" cscope-result-separator) nil t)
+                   (match-beginning 0)))))
+          (when-let* ((beginning beginning)
+                      (search (get-text-property
+                               beginning 'cscope-stored-search)))
+            (let ((end (or (next-single-property-change
+                            beginning 'cscope-stored-search nil (point-max))
+                           (point-max))))
+              (with-silent-modifications
+                (put-text-property
+                 beginning end 'cscope-stored-search
+                 `(kmode--xcscope-rerun
+                   ',(copy-tree state) ',(copy-tree search)))))
+            beginning))))))
+
+(defun kmode--xcscope-rerun (state search)
+  "Evaluate xcscope SEARCH with its saved profile STATE.
+
+This is stored in a Kmode result's `cscope-stored-search' property and is
+evaluated by xcscope's native `cscope-rerun-search-at-point' command."
+  (let ((buffer (current-buffer))
+        (start (point)))
+    (unwind-protect
+        (cl-progv (mapcar #'car state) (mapcar #'cdr state)
+          (eval search))
+      ;; xcscope deletes the old result before evaluating its stored search.
+      ;; Protect the replacement as well, so repeated `r' commands are safe.
+      (kmode--protect-xcscope-result-rerun buffer start state t))))
+
+(defun kmode--call-xcscope (command)
+  "Invoke xcscope COMMAND against the active kernel profile."
+  (unless (require 'xcscope nil t)
+    (user-error "Xcscope.el is unavailable; install xcscope for this adapter"))
+  (let* ((context (kmode-resolve-context))
+         (program (kmode-require-tool "cscope" context))
+         (directory (kmode--cscope-database-directory context)))
+    (unless directory
+      (user-error "No cscope database for this profile; run kmode-build-cscope"))
+    (unless (fboundp command)
+      (user-error "Installed xcscope does not provide `%s'" command))
+    (let* ((state (kmode--xcscope-profile-state program directory))
+           (output-buffer (get-buffer-create cscope-output-buffer-name))
+           (start (with-current-buffer output-buffer (point-max))))
+      (when (with-current-buffer output-buffer cscope-process)
+        (user-error "A cscope search is already in progress"))
+      (kmode--with-xcscope-buffer-state
+       output-buffer state
+       (lambda ()
+         (cl-progv (mapcar #'car state) (mapcar #'cdr state)
+           (let ((default-directory (kmode-context-root context)))
+             (call-interactively command)))))
+      (kmode--protect-xcscope-result-rerun
+       output-buffer start state))))
+
+;;;###autoload
+(defun kmode-cscope-find-symbol ()
+  "Find a symbol with the optional profile-aware xcscope adapter."
+  (interactive)
+  (kmode--call-xcscope #'cscope-find-this-symbol))
+
+;;;###autoload
+(defun kmode-cscope-find-definition ()
+  "Find a global definition with the profile-aware xcscope adapter."
+  (interactive)
+  (kmode--call-xcscope #'cscope-find-global-definition))
+
+;;;###autoload
+(defun kmode-cscope-find-callers ()
+  "Find functions calling the function at point with xcscope."
+  (interactive)
+  (kmode--call-xcscope #'cscope-find-functions-calling-this-function))
+
+;;;###autoload
+(defun kmode-cscope-find-callees ()
+  "Find functions called by the function at point with xcscope."
+  (interactive)
+  (kmode--call-xcscope #'cscope-find-called-functions))
+
+;;;###autoload
+(defun kmode-cscope-find-text ()
+  "Find a text string in the active kernel profile with xcscope."
+  (interactive)
+  (kmode--call-xcscope #'cscope-find-this-text-string))
+
+;;;###autoload
+(defun kmode-cscope-find-includers ()
+  "Find files including the file at point with xcscope."
+  (interactive)
+  (kmode--call-xcscope #'cscope-find-files-including-file))
+
 (defun kmode--stop-eglot-after-profile-change ()
   "Stop Eglot servers whose kernel profile has just changed."
   (when (and kmode-stop-eglot-on-profile-change
@@ -345,10 +554,14 @@ provide a broader textual result set."
                   database))
     (setq-local eglot-server-programs
                 (cons (cons major-mode
-                            (list clangd
-                                  (concat "--compile-commands-dir="
-                                          (directory-file-name database-dir))))
-                      (assq-delete-all major-mode eglot-server-programs)))
+                            (append
+                             (list clangd
+                                   (concat "--compile-commands-dir="
+                                           (directory-file-name database-dir)))
+                             kmode-clangd-arguments))
+                      (cl-loop for entry in eglot-server-programs
+                               unless (eq (car-safe entry) major-mode)
+                               collect entry)))
     (eglot-ensure)))
 
 (kmode-register-action
@@ -375,6 +588,21 @@ provide a broader textual result set."
  'eglot "Start profile-aware clangd" "Navigate" #'kmode-eglot-ensure
  :predicate (lambda () (and (locate-library "eglot")
                             (kmode-tool-path "clangd"))))
+(kmode-register-action
+ 'cscope-definition "Cscope: find definition" "Navigate"
+ #'kmode-cscope-find-definition
+ :predicate #'kmode-cscope-available-p
+ :description "Use an existing profile-local database through xcscope.el")
+(kmode-register-action
+ 'cscope-callers "Cscope: find callers" "Navigate"
+ #'kmode-cscope-find-callers
+ :predicate #'kmode-cscope-available-p
+ :description "Find functions that call the symbol at point")
+(kmode-register-action
+ 'cscope-callees "Cscope: find callees" "Navigate"
+ #'kmode-cscope-find-callees
+ :predicate #'kmode-cscope-available-p
+ :description "Find functions called by the symbol at point")
 
 (provide 'kmode-navigate)
 

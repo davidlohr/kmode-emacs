@@ -7,19 +7,60 @@ project is pre-release; interfaces may change before 1.0.
 
 ### Added
 
+- An explicitly enabled global `C-c k` launcher.  `C-c k k` uses the current
+  kernel root, otherwise reuses the last valid session root, tries
+  `kmode-default-root`, or prompts; `kmode-select-root` / `C-c k R` selects a
+  new remembered root and a dashboard prefix argument always prompts.  These
+  are the only outside-tree entry points; other prefix commands require a
+  kernel buffer or dashboard context.  Buffer-local editing behavior remains
+  restricted to recognized kernel-tree files.
+- Profile-aware kernel index generation: `kmode-build-tags` / `C-c k n t`
+  runs `make TAGS`, and `kmode-build-cscope` / `C-c k n C b` runs
+  `make cscope`.  `kmode-auto-activate-tags` optionally binds the selected
+  profile's readable output table buffer-locally;
+  `kmode-refresh-tags-table` reapplies that policy, and profile selection
+  refreshes TAGS plus compile-command state across enabled worktree buffers.
+  Xref remains the standard interface and Etags is documented as a non-semantic
+  fallback.  TAGS/cscope availability checks do not pre-detect kernel Make
+  targets, so unsupported targets fail visibly in Compilation.  Documentation
+  identifies the active profile's exact TAGS, cscope, compilation-database, and
+  clangd-shard paths and distinguishes clangd's external-header user cache.
+- An optional, feature-detected xcscope adapter under `C-c k n C` for
+  definitions, callers, callees, symbols, text, and includers.  Build and
+  status paths are pinned to the selected profile output, and queries require
+  that output's readable `cscope.out` rather than accepting `cscope.files` or
+  another profile's source-tree database.  Each call dynamically binds the
+  chosen database directory, standard names, query-only behavior, resolved
+  cscope program, kernel mode, and source working directory; Kmode has no
+  load-time xcscope dependency and does not configure `consult-cscope`.
+- The complete CC Mode offset table from the kernel documentation,
+  including its exact tab-only argument-list continuation/closing behavior,
+  plus an 80-column fill target and buffer-local trailing-whitespace and
+  final-newline values under a master C-style switch.
+- Managed Kbuild output selectors cannot be replaced by free-form Make arguments; profiles must use `:output`, keeping locks and index locations coherent.
+- A truthful editor-integration policy covering Eglot/clangd, TAGS,
+  optional dynamically scoped xcscope, user-owned consult-cscope, TRAMP, and
+  diff gutters, grounded in upstream kernel documentation and cited community
+  prior art.  Kmode-owned TAGS/cscope jobs are explicit and cancellable;
+  clangd background indexing begins after explicit Eglot startup and remains
+  owned by Eglot/clangd.  `kmode-clangd-arguments` now defaults to background
+  indexing, detailed completion, and no automatic header insertion; clang-tidy
+  is opt-in.
 - The project is published as `kmode-emacs`; files, features, commands,
   customization variables, process buffers, tests, and documentation use the
   `kmode-` namespace before the first stable release.
 - A task-oriented getting-started guide covering safe out-of-tree profiles,
   the first build, dashboard operation, semantic definition/caller setup, the
   complete navigation map, initial virtme-ng workflows, and troubleshooting;
-  the README now leads with the same critical first-session path.
+  the README now leads with the same critical first-session path.  Updates
+  require an Emacs restart; re-running `require` does not reload an already
+  provided feature or rebuild its keymaps.
 - Public-repository hygiene for generated Emacs artifacts and local agent
   workspace state, plus bug-report and pull-request templates and a security
   reporting policy.
 - Initial `kmode-emacs` 0.1.0 development implementation for Emacs 28.1 and
-  newer, including a globalized auto-enable mode, kernel-local `C-c k` command
-  map/menu, mode-line profile, Emacs Project integration, scoped Linux C style,
+  newer, including a global launcher/auto-enable mode, `C-c k` command map/menu,
+  mode-line profile, Emacs Project integration, scoped Linux C style,
   profile-derived `compile-command`, and a profile-owned remap for edited
   compilation commands.
 - Kernel-root discovery, per-worktree session profiles, buffer overrides,
@@ -28,8 +69,12 @@ project is pre-release; interfaces may change before 1.0.
   canonical build-directory serialization, capability predicates, and shared
   Compilation-mode process plumbing.
 - Completion dispatcher, read-only flight-deck dashboard, capability doctor,
-  distinct active-profile/worktree live-job counts, and extension-facing
-  action registry.
+  status for six active-profile paths (`.config`, `compile_commands.json`,
+  `.cache/clangd/index/`, `TAGS`, `cscope.out`, and `vmlinux`),
+  Etags/cscope/xcscope checks, distinct active-profile/worktree live-job counts,
+  and an extension-facing action registry.  Dashboard status is
+  `ready · <mtime>`/`missing`; Doctor uses `[OK]`/`[--]` plus the path, and both
+  are readability checks rather than freshness validation.
 - Profile-aware Kbuild commands for default/explicit targets, the current
   object/directory, configuration targets, `compile_commands.json`, Sparse,
   and confirmed cleanup, with ambient Kbuild-selector sanitization;
@@ -39,8 +84,9 @@ project is pre-release; interfaces may change before 1.0.
 - Optional profile-aware extra-warning, Smatch, report-only Coccinelle, Clang
   analyzer, and checkstack commands with tool/target/artifact checks.
 - Kernel-aware Kconfig/include/Kbuild/source-header/Documentation navigation,
-  definition/caller/back commands, profile-aware Eglot/clangd startup, and a
-  dedicated `C-c k n` navigation map.  The Kconfig mode provides indentation,
+  definition/caller/back commands, profile-aware Eglot/clangd startup, explicit
+  TAGS/cscope generation, and a dedicated `C-c k n` navigation map with an
+  optional `C-c k n C` xcscope submap.  The Kconfig mode provides indentation,
   font lock, Imenu, and contained root-relative/relative source following with
   distinct ARCH/SRCARCH expansion.  Profile switches stop stale worktree Eglot
   servers by default and leave restart explicit.  Standard Xref `M-.`, `M-?`,
@@ -80,9 +126,8 @@ project is pre-release; interfaces may change before 1.0.
   targets, and CI coverage for Emacs 28.1, 29.4, and 30.2, including vng argv,
   canonical-option/default/config/HOME/architecture/PATH safety, frozen-chain,
   endpoint-locking, process/action/keymap tests, and navigation shortcut
-  coverage.  No real vng build, guest boot, GDB attach, or dump was exercised
-  in the implementation environment because neither vng executable was
-  installed.
+  coverage.  Real vng builds, guest boots, GDB attaches, and dumps remain
+  explicit integration smoke tests outside the hermetic suite.
 - README, design/roadmap, contribution, safety, capability-degradation, and
   extension documentation grounded in upstream Linux, Emacs, clangd, b4,
   KUnit/Kselftest, QEMU, and virtme-ng interfaces.

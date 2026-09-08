@@ -32,6 +32,16 @@
   :type '(repeat string)
   :group 'kmode)
 
+(defcustom kmode-default-root nil
+  "Kernel source tree offered to project-wide commands outside a tree.
+
+When nil, kmode-emacs remembers the kernel tree selected during this
+Emacs session and prompts when it has no usable tree.  A non-nil value
+may name either a kernel root or a directory below one."
+  :type '(choice (const :tag "Remember or prompt" nil)
+                 (directory :tag "Kernel source tree"))
+  :group 'kmode)
+
 (defcustom kmode-profiles
   '(("default"
      :description "Native toolchain, in-tree output"
@@ -126,11 +136,15 @@ Supported values are `auto', `gcc', and `clang'.")
 (defvar-local kmode-compilation-process nil
   "Most recent Compilation process started in this kmode-emacs buffer.")
 
+(defvar-local kmode-process-finish-function nil
+  "Finish callback reinstalled when this kmode-emacs job is recompiled.")
+
 ;; Compilation mode is reinitialized by `recompile'.  Preserve ownership long
 ;; enough for its start hook to guard and tag the replacement process.
 (put 'kmode-process-resource 'permanent-local t)
 (put 'kmode-process-root 'permanent-local t)
 (put 'kmode-process-profile 'permanent-local t)
+(put 'kmode-process-finish-function 'permanent-local t)
 
 (put 'kmode-compiler 'safe-local-variable
      (lambda (value) (memq value '(auto gcc clang))))
@@ -154,6 +168,9 @@ Supported values are `auto', `gcc', and `clang'.")
 
 (defvar kmode--root-cache (make-hash-table :test #'equal)
   "Cache mapping directories to kernel roots or the symbol `none'.")
+
+(defvar kmode--last-root nil
+  "Kernel root most recently chosen for a project-wide command.")
 
 (defvar kmode--selected-profiles (make-hash-table :test #'equal)
   "Session-local profile selection for each kernel root.")
@@ -238,6 +255,71 @@ signal a `user-error'."
     (cond (root root)
           (noerror nil)
           (t (user-error "This buffer is not inside a Linux kernel source tree")))))
+
+(defun kmode--root-containing (directory)
+  "Return the normalized kernel root containing DIRECTORY, or nil.
+
+Unlike `kmode-locate-root', this deliberately bypasses the discovery
+cache so an explicitly selected directory is validated against the
+filesystem as it exists now."
+  (when (and (stringp directory)
+             (not (string-empty-p directory)))
+    (let* ((expanded (expand-file-name directory))
+           (start (and (file-directory-p expanded)
+                       (file-name-as-directory expanded)))
+           (root (and start
+                      (locate-dominating-file start
+                                              #'kmode-kernel-root-p))))
+      (and root (file-name-as-directory (expand-file-name root))))))
+
+;;;###autoload
+(defun kmode-select-root (&optional directory)
+  "Select the kernel tree used by project-wide commands.
+
+DIRECTORY may be the tree root or a directory below it.  Interactively,
+prompt for an existing directory.  Return and remember the normalized
+kernel root."
+  (interactive)
+  (let* ((current (kmode-root t))
+         (remembered (kmode--root-containing kmode--last-root))
+         (configured (kmode--root-containing kmode-default-root))
+         (initial (or current remembered configured default-directory))
+         (directory
+          (or directory
+              (read-directory-name "Linux kernel source tree: "
+                                   initial initial t)))
+         (root (kmode--root-containing directory)))
+    (unless root
+      (user-error "%s is not inside a recognizable Linux kernel source tree"
+                  (abbreviate-file-name (expand-file-name directory))))
+    (setq kmode--last-root root)
+    (when (called-interactively-p 'interactive)
+      (message "Kmode-emacs kernel tree: %s"
+               (abbreviate-file-name root)))
+    root))
+
+(defun kmode-command-root (&optional force-selection)
+  "Return a kernel root for a project-wide command.
+
+Without FORCE-SELECTION, prefer the current buffer's tree, then the
+last tree selected this session, then `kmode-default-root'.  Prompt if
+none is usable.  With FORCE-SELECTION, always prompt."
+  (let ((current (and (not force-selection)
+                      (kmode--root-containing (kmode-root t))))
+        (remembered (and (not force-selection)
+                         (kmode--root-containing kmode--last-root))))
+    (cond
+     (current
+      (setq kmode--last-root current))
+     (remembered remembered)
+     ((and (not force-selection) kmode-default-root)
+      (or (setq kmode--last-root
+                (kmode--root-containing kmode-default-root))
+          (user-error
+           "`kmode-default-root' is not inside a recognizable Linux kernel tree: %s"
+           (abbreviate-file-name (expand-file-name kmode-default-root)))))
+     (t
+      (kmode-select-root)))))
 
 (defun kmode--profile-entry (name)
   "Return the configured profile entry named NAME."
@@ -628,7 +710,10 @@ PROCESS defaults to the current buffer's process when this is called outside
                                          kmode-process-profile))
           (when kmode-process-resource
             (kmode-mark-process-resource (current-buffer)
-                                          kmode-process-resource)))
+                                          kmode-process-resource))
+          (when kmode-process-finish-function
+            (add-hook 'compilation-finish-functions
+                      kmode-process-finish-function nil t)))
       (error
        (when (process-live-p process)
          (delete-process process))
@@ -673,7 +758,8 @@ still available to finish hooks."
                1 2 3))
 
 (defun kmode-start-shell-command
-    (label command &optional directory mode resource context finish-function)
+    (label command &optional directory mode resource context finish-function
+           persistent-finish-function)
   "Run shell COMMAND asynchronously in a kmode-emacs compilation buffer.
 
 LABEL names the buffer, DIRECTORY defaults to the kernel source root,
@@ -682,7 +768,8 @@ directory, refuse to overlap another kmode-emacs process using that directory.
 CONTEXT, when non-nil, pins the root/profile identity to a previously resolved
 `kmode-context'.  FINISH-FUNCTION, when non-nil, is installed buffer-locally
 before the process starts and receives the usual compilation buffer and status
-arguments.  Return the compilation buffer."
+arguments.  PERSISTENT-FINISH-FUNCTION, when non-nil, is also installed on
+subsequent `kmode-recompile' runs.  Return the compilation buffer."
   (unless (and (stringp command) (not (string-empty-p command)))
     (user-error "Kmode-emacs command must be a non-empty string"))
   (let* ((current-root (kmode-root t))
@@ -711,10 +798,16 @@ arguments.  Return the compilation buffer."
                             (kmode-process-resource-key resource)))
          (inherited-setup compilation-process-setup-function)
          (compilation-process-setup-function
-          (if (or inherited-setup finish-function)
+          (if (or inherited-setup finish-function
+                  persistent-finish-function)
               (lambda ()
                 (when inherited-setup
                   (funcall inherited-setup))
+                (setq-local kmode-process-root root)
+                (setq-local kmode-process-profile profile)
+                (setq-local kmode-process-resource resource-key)
+                (setq-local kmode-process-finish-function
+                            persistent-finish-function)
                 (when finish-function
                   (add-hook 'compilation-finish-functions
                             finish-function nil t)))
@@ -729,7 +822,9 @@ arguments.  Return the compilation buffer."
       (with-current-buffer existing-buffer
         (setq-local kmode-process-root root)
         (setq-local kmode-process-profile profile)
-        (setq-local kmode-process-resource resource-key)))
+        (setq-local kmode-process-resource resource-key)
+        (setq-local kmode-process-finish-function
+                    persistent-finish-function)))
     (let ((buffer
            (compilation-start command (or mode 'kmode-compilation-mode)
                               (lambda (_mode) buffer-name))))
@@ -740,15 +835,18 @@ arguments.  Return the compilation buffer."
 
 (defun kmode-start-command
     (label program arguments
-           &optional directory mode resource context finish-function)
+           &optional directory mode resource context finish-function
+           persistent-finish-function)
   "Run PROGRAM with ARGUMENTS asynchronously in a compilation buffer.
 
-LABEL, DIRECTORY, MODE, RESOURCE, CONTEXT, and FINISH-FUNCTION have the
-meanings documented by `kmode-start-shell-command'.  PROGRAM and each item in
-ARGUMENTS are shell quoted as distinct argv tokens."
+LABEL, DIRECTORY, MODE, RESOURCE, CONTEXT, FINISH-FUNCTION, and
+PERSISTENT-FINISH-FUNCTION have the meanings documented by
+`kmode-start-shell-command'.  PROGRAM and each item in ARGUMENTS are shell
+quoted as distinct argv tokens."
   (kmode-start-shell-command
    label (kmode-shell-command program arguments)
-   directory mode resource context finish-function))
+   directory mode resource context finish-function
+   persistent-finish-function))
 
 (defun kmode-file-in-root (&optional file context)
   "Return FILE relative to CONTEXT's root, or signal a user error."

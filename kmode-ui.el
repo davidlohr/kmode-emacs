@@ -136,6 +136,9 @@ and explain if the selected action cannot run."
          (output (kmode-context-output context))
          (config (expand-file-name ".config" output))
          (database (expand-file-name "compile_commands.json" output))
+         (clangd-index (expand-file-name ".cache/clangd/index" output))
+         (tags (expand-file-name "TAGS" output))
+         (cscope (expand-file-name "cscope.out" output))
          (vmlinux (expand-file-name "vmlinux" output))
          (jobs (kmode-running-processes context))
          (worktree-jobs (kmode-running-processes context t))
@@ -163,6 +166,12 @@ and explain if the selected action cannot run."
                           (unless (file-readable-p config) 'warning))
     (kmode--insert-field "Compile DB" (kmode--artifact-status database)
                           (unless (file-readable-p database) 'warning))
+    (kmode--insert-field "clangd index" (kmode--artifact-status clangd-index)
+                          (unless (file-readable-p clangd-index) 'warning))
+    (kmode--insert-field "TAGS" (kmode--artifact-status tags)
+                          (unless (file-readable-p tags) 'warning))
+    (kmode--insert-field "cscope" (kmode--artifact-status cscope)
+                          (unless (file-readable-p cscope) 'warning))
     (kmode--insert-field "vmlinux" (kmode--artifact-status vmlinux)
                           (unless (file-readable-p vmlinux) 'warning))
     (kmode--insert-field
@@ -234,10 +243,14 @@ and explain if the selected action cannot run."
   "Major mode for the kmode-emacs kernel flight deck.")
 
 ;;;###autoload
-(defun kmode-dashboard ()
-  "Open the flight deck for the current kernel worktree."
-  (interactive)
-  (let* ((root (kmode-root))
+(defun kmode-dashboard (&optional force-root-selection)
+  "Open the flight deck for a Linux kernel worktree.
+
+Inside a kernel buffer, use that buffer's worktree.  Elsewhere, reuse
+the last selected tree or `kmode-default-root', prompting when needed.
+With prefix argument FORCE-ROOT-SELECTION, always prompt for a tree."
+  (interactive "P")
+  (let* ((root (kmode-command-root force-root-selection))
          (origin (if (derived-mode-p 'kmode-dashboard-mode)
                      kmode-dashboard-origin
                    (current-buffer)))
@@ -282,6 +295,15 @@ and explain if the selected action cannot run."
                  "Install Git.")
            (list "ripgrep" (kmode-tool-path "rg" context) "fast tree search"
                  "Install ripgrep; kmode-emacs has slower fallbacks.")
+           (list "Etags" (kmode-tool-path "etags" context)
+                 "kernel-native TAGS/Xref fallback"
+                 "Install Etags to use the kernel's make TAGS target.")
+           (list "cscope" (kmode-tool-path "cscope" context)
+                 "optional caller/callee database"
+                 "Install cscope, then run kmode-build-cscope.")
+           (list "xcscope.el" (locate-library "xcscope")
+                 "optional Emacs cscope frontend"
+                 "Install xcscope.el to use Kmode's cscope adapter.")
            (list "clangd" (kmode-tool-path "clangd" context) "semantic navigation"
                  "Install clangd, generate compile_commands.json, then start Eglot.")
            (list "sparse" (kmode-tool-path "sparse" context) "kernel static analysis"
@@ -340,14 +362,27 @@ and explain if the selected action cannot run."
           (kmode--doctor-row (nth 0 check) (nth 1 check)
                               (nth 2 check) (nth 3 check)))
         (insert "\nArtifacts\n")
-        (dolist (artifact
-                 (list (cons ".config" (expand-file-name ".config" output))
-                       (cons "compile_commands.json"
-                             (expand-file-name "compile_commands.json" output))
-                       (cons "vmlinux" (expand-file-name "vmlinux" output))))
-          (kmode--doctor-row (car artifact) (file-readable-p (cdr artifact))
-                              (abbreviate-file-name (cdr artifact))
-                              "Build or generate this artifact for the active profile."))
+        (dolist
+            (artifact
+             (list
+              (list ".config" (expand-file-name ".config" output)
+                    "Run defconfig, olddefconfig, or menuconfig for this profile.")
+              (list "compile_commands.json"
+                    (expand-file-name "compile_commands.json" output)
+                    "Run kmode-build-compile-commands for this profile.")
+              (list "clangd index"
+                    (expand-file-name ".cache/clangd/index" output)
+                    "Build the compile database, start Eglot/clangd, and let background indexing finish.")
+              (list "TAGS" (expand-file-name "TAGS" output)
+                    "Run kmode-build-tags for this profile.")
+              (list "cscope.out" (expand-file-name "cscope.out" output)
+                    "Install cscope, then run kmode-build-cscope for this profile.")
+              (list "vmlinux" (expand-file-name "vmlinux" output)
+                    "Build vmlinux for this profile.")))
+          (kmode--doctor-row (nth 0 artifact)
+                              (file-readable-p (nth 1 artifact))
+                              (abbreviate-file-name (nth 1 artifact))
+                              (nth 2 artifact)))
         (insert "\nRoot: " (abbreviate-file-name root) "\n")
         (goto-char (point-min)))
       (special-mode))
