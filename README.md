@@ -18,6 +18,13 @@ tables describe only code present in the repository.
 These are real Emacs sessions against a Linux kernel checkout, not mockups.
 Click any image for the full-size capture.
 
+[![Watch kmode-emacs navigate from a call site to an implementation, Kconfig definition, kernel header, matching source, and owning Kbuild file](docs/screenshots/06-navigation-video-poster.png)](docs/kmode-emacs-navigation.mp4)
+
+**[Watch the 73-second navigation flight (MP4)](docs/kmode-emacs-navigation.mp4)** —
+recorded from the author's real `~/.emacs` against `~/code/linux`.  It uses
+the global launcher, dashboard, Doctor, Etags/Xref, CONFIG-aware navigation,
+include resolution, header/source switching, Kbuild lookup, and keymap help.
+
 | Flight deck — `C-c k k` | Implementation and callers — `C-c k n r` |
 | --- | --- |
 | [![Kmode flight deck beside a live kernel source buffer](docs/screenshots/01-flight-deck.png)](docs/screenshots/01-flight-deck.png) | [![wake_up_process implementation beside its Xref callers](docs/screenshots/02-implementation-callers.png)](docs/screenshots/02-implementation-callers.png) |
