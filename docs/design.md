@@ -472,8 +472,10 @@ definition and back aliases.
 `kmode-find-usages` (`C-c k n r`) accepts functions, struct/union/enum types,
 fields, macros, and globals.  Its `auto` backend prefers semantic Xref only
 when Eglot manages the buffer, then a selected-profile cscope symbol query,
-then asynchronous fixed-word ripgrep.  If `rg` is absent it initializes and
-starts Emacs `rgrep` asynchronously.  Cscope and text result buffers retain
+then asynchronous fixed-word ripgrep.  Without `rg`, a Git worktree uses
+asynchronous fixed-word `git grep` across tracked and non-ignored untracked
+files; a non-Git tree initializes and starts Emacs `rgrep` asynchronously.
+Cscope and text result buffers retain
 persistent headers that describe their indexed or textual precision.  A prefix
 argument chooses `auto`, current Xref, cscope, or text for one query, so an
 active TAGS/Etags backend remains directly available without being called a
@@ -1574,7 +1576,7 @@ Action predicates are checked for presentation and again before dispatch.
 
 | Missing component | Current or planned degraded behavior | Status |
 | --- | --- | --- |
-| `rg` | Use Emacs Kconfig scan/file enumeration and initialized asynchronous `rgrep` for usages | Implemented |
+| `rg` | Use Emacs Kconfig scan/file enumeration; usages try asynchronous Git grep, then initialized `rgrep` | Implemented |
 | Eglot or `clangd` | Use selected-profile cscope occurrences, then labelled asynchronous text usages; keep other Xref/kernel navigation | Implemented |
 | compilation database | Keep textual navigation and reject Eglot startup with remediation | Implemented |
 | Etags executable | Keep Xref's other active backends and textual navigation; disable only explicit TAGS generation | Implemented |
@@ -1673,8 +1675,9 @@ features that do not exist yet:
 ## Performance and compatibility hazards
 
 - The kernel is too large for synchronous recursive Lisp scans during mode
-  activation.  Universal text-usage lookup therefore runs ripgrep or recursive
-  grep asynchronously.  The current Kconfig and source/header fallbacks are
+  activation.  Universal text-usage lookup therefore runs ripgrep, Git grep,
+  or recursive grep asynchronously.  The current Kconfig and source/header
+  fallbacks are
   acceptable explicit commands but should become asynchronous/bounded where
   possible.
 - Lore availability and archive contents are external state.  Fresh/stale labels

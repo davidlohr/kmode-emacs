@@ -2551,6 +2551,65 @@
         (when (buffer-live-p result)
           (kill-buffer result))))))
 
+(ert-deftest kmode-test/usages-prefers-async-safely-quoted-git-grep ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "navigation integration is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (make-directory (expand-file-name ".git" root))
+    (let* ((result (generate-new-buffer " *kmode-usages-git-grep*"))
+           (kmode-usages-text-files "*.c *.h")
+           tool-calls observed)
+      (unwind-protect
+          (with-temp-buffer
+            (setq default-directory (file-name-as-directory root))
+            (cl-letf
+                (((symbol-function 'kmode-tool-path)
+                  (lambda (tool &optional _context)
+                    (push tool tool-calls)
+                    (pcase tool
+                      ("rg" nil)
+                      ("git" "/trusted/bin/git")
+                      (_ (ert-fail
+                          (format "Unexpected tool resolution: %s" tool))))))
+                 ((symbol-function 'grep-compute-defaults)
+                  (lambda ()
+                    (ert-fail "rgrep defaults must not run in a Git tree")))
+                 ((symbol-function 'rgrep)
+                  (lambda (&rest _arguments)
+                    (ert-fail "rgrep must not run when Git grep is available")))
+                 ((symbol-function 'compilation-start)
+                  (lambda (command mode name-function &rest _arguments)
+                    (setq observed
+                          (list command mode (funcall name-function "grep")))
+                    result)))
+              (kmode-find-usages "wake_up_process" 'text))
+            (should (equal (nreverse tool-calls) '("rg" "git")))
+            (should
+             (equal
+              (nth 0 observed)
+              (mapconcat
+               #'shell-quote-argument
+               (list "/trusted/bin/git" "-C" (file-name-as-directory root)
+                     "grep" "--line-number" "--full-name" "--no-color"
+                     "--fixed-strings" "--word-regexp" "-I" "--untracked"
+                     "--exclude-standard" "-e" "wake_up_process" "--"
+                     "*.c" "*.h")
+               " ")))
+            (should (eq (nth 1 observed) 'grep-mode))
+            (should (string-match-p
+                     "kmode textual usages: wake_up_process" (nth 2 observed)))
+            (with-current-buffer result
+              (should
+               (equal (buffer-name)
+                      "*kmode textual usages: wake_up_process*"))
+              (should (string-match-p
+                       "GIT GREP TEXT MATCHES"
+                       (format "%s" header-line-format)))
+              (should (string-match-p
+                       "not semantic" (format "%s" header-line-format)))))
+        (when (buffer-live-p result)
+          (kill-buffer result))))))
+
 (ert-deftest kmode-test/usages-forced-missing-cscope-is-actionable ()
   (unless (featurep 'kmode-navigate)
     (ert-skip "navigation integration is not present"))

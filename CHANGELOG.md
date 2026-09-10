@@ -17,7 +17,7 @@ project is pre-release; interfaces may change before 1.0.
 - Universal identifier usage lookup on `C-c k n r` for functions, types,
   fields, macros, and globals.  Automatic selection prefers active
   Eglot/clangd semantic references, then profile-local cscope occurrences,
-  then an asynchronous ripgrep/recursive-grep search with persistent
+  then asynchronous ripgrep, Git grep, or recursive-grep search with persistent
   precision labels.  `C-c k n a` prefers cscope's dedicated indexed function
   caller query and otherwise labels semantic or textual caller candidates;
   `C-c k n C r` remains the direct cscope command.

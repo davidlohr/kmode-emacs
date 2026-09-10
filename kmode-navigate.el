@@ -434,24 +434,49 @@ ordinary `task_struct' use."
        (generate-new-buffer-name
         (format "*kmode textual usages: %s*" identifier))))))
 
+(defun kmode--start-git-grep-usages (identifier root git)
+  "Start an asynchronous Git grep for IDENTIFIER below ROOT using GIT."
+  (let* ((arguments
+          (append
+           (list git "-C" root "grep" "--line-number" "--full-name"
+                 "--no-color" "--fixed-strings" "--word-regexp" "-I"
+                 "--untracked" "--exclude-standard" "-e" identifier "--")
+           (split-string kmode-usages-text-files nil t)))
+         (command (mapconcat #'shell-quote-argument arguments " "))
+         (default-directory root))
+    (compilation-start
+     command 'grep-mode
+     (lambda (_mode)
+       (generate-new-buffer-name
+        (format "*kmode textual usages: %s*" identifier))))))
+
 (defun kmode--find-textual-usages (identifier)
   "Find explicitly labelled textual occurrences of IDENTIFIER."
   (let* ((root (kmode-root))
          (context (kmode-resolve-context root))
          (rg (kmode-tool-path "rg" context))
+         (git (and (not rg)
+                   (file-exists-p (expand-file-name ".git" root))
+                   (kmode-tool-path "git" context)))
          (buffer
-          (if rg
-              (kmode--start-rg-usages identifier root rg)
+          (cond
+           (rg (kmode--start-rg-usages identifier root rg))
+           (git (kmode--start-git-grep-usages identifier root git))
+           (t
             (grep-compute-defaults)
             (rgrep (concat "\\<" (regexp-quote identifier) "\\>")
                    kmode-usages-text-files root)
-            next-error-last-buffer)))
+            next-error-last-buffer))))
     (message "Kmode usages: %s matches (not semantic references)"
-             (if rg "ripgrep text" "grep text"))
+             (cond (rg "ripgrep text")
+                   (git "git grep text")
+                   (t "grep text")))
     (kmode--label-usages-buffer
      buffer
      (format "*kmode textual usages: %s*" identifier)
-     (concat (if rg "RIPGREP" "GREP")
+     (concat (cond (rg "RIPGREP")
+                   (git "GIT GREP")
+                   (t "GREP"))
              " TEXT MATCHES - not semantic; may include declarations, "
              "definitions, comments, strings, and inactive code"))))
 

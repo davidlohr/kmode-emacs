@@ -162,8 +162,9 @@ The short answer is:
 
 `C-c k n r` is the universal command.  In automatic mode it prefers semantic
 references from an active Eglot/clangd session, then selected-profile cscope
-symbol occurrences, then a responsive asynchronous ripgrep search (or Emacs
-`rgrep` when `rg` is absent).  Text and cscope buffers say clearly that their
+symbol occurrences, then responsive asynchronous ripgrep.  Without `rg`, a Git
+worktree uses asynchronous Git grep; a non-Git tree finally uses Emacs
+`rgrep`.  Text and cscope buffers say clearly that their
 results are not semantic.  Use `C-u C-c k n r` to choose one backend for the
 query, including current Xref when you want to use profile TAGS/Etags.
 
@@ -404,8 +405,8 @@ installed virtme-ng/kernel combination as an integration smoke test and inspect
 - If definition lookup has no backend, confirm Eglot is installed, `clangd`
   is on Emacs's `exec-path`, the active output contains a readable
   `compile_commands.json`, and `C-c k n e` succeeded; alternatively build a
-  `TAGS` table with `C-c k n t` for indexed, non-semantic lookup.  Universal
-  usages still fall back to asynchronous text search.
+  `TAGS` table with `C-c k n t` for indexed, non-semantic lookup.
+  Universal usages still fall back to asynchronous Git grep or `rgrep` text search.
 - For cscope queries, confirm Doctor finds `cscope` and `xcscope.el`, then
   build a database with `C-c k n C b`.  Dashboard and Doctor check only the
   selected profile's output `cscope.out`, and queries use that same database.

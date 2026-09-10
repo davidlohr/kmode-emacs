@@ -132,7 +132,7 @@ libraries shipped with Emacs.  External capabilities are independent:
 | Capability | Required component | Behavior when absent |
 | --- | --- | --- |
 | Kernel builds/config/compile DB | `make` and a configured kernel tree | Build actions are unavailable; editing/navigation still work |
-| Fast file, Kconfig, and textual-usage lookup | `rg` | Kconfig/file lookup uses slower Emacs fallbacks; usage search uses asynchronous `rgrep` |
+| Fast file, Kconfig, and textual-usage lookup | `rg` | Kconfig/file lookup uses slower Emacs fallbacks; usages use asynchronous Git grep in a Git worktree, then `rgrep` |
 | Semantic C navigation | Eglot and `clangd` | Usage lookup tries the selected profile's cscope database, then a clearly labeled text search |
 | Lore mailing-list context | HTTPS access to the configured public-inbox, by default `lore.kernel.org` | A stale cached result page is labeled `STALE` when available; all local workflows remain usable |
 | Review/live checks | executable tree-local `scripts/checkpatch.pl`, `scripts/get_maintainer.pl`, and Git as applicable | Only the affected actions fail or disappear |
@@ -726,7 +726,7 @@ asks the current Xref backend for references, and `M-,` goes back.
 `C-c k n r` is intentionally broader: `kmode-find-usages` with the default
 `kmode-usages-backend` of `auto` tries semantic Xref only when Eglot actively
 manages the buffer, then selected-profile cscope symbol occurrences, then an
-asynchronous ripgrep search (or asynchronous `rgrep` when `rg` is missing).
+asynchronous ripgrep, then Git grep in a Git worktree, and finally `rgrep`.
 A prefix argument (`C-u C-c k n r`) chooses a backend for that query;
 choose current Xref to use another active backend such as profile-local
 TAGS/Etags.  Textual and cscope
