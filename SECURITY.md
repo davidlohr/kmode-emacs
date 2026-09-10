@@ -35,5 +35,22 @@ That expected capability is not itself a vulnerability.  A bypass of the
 documented previews, validation, containment, profile isolation, resource
 locking, or confirmation boundaries may be one.
 
+## Lore network and cache boundary
+
+Lore lookup is an explicit, read-only HTTPS action.  Kmode sends the selected
+public-inbox query, which may contain an identifier and a kernel-relative path;
+it does not upload source buffers.  Moving point never starts a request.  Git
+blame provenance follows only trusted `https://lore.kernel.org/` links and
+normalizes the exact legacy `https://lkml.kernel.org/r/` form; other hosts
+and plain HTTP are rejected.  The integration does not fetch a patch series
+into the worktree, apply patches, or send mail.
+
+Parsed result metadata is cached below
+`~/.emacs.d/kmode-emacs/lore/` by default, independently of TAGS, cscope,
+and clangd indexes.  Kmode creates the directory with mode 0700 and cache
+files with mode 0600, bounds the entry count, avoids following symlinks when
+clearing, and labels fallback data `STALE`.  Treat subjects, authors, URLs, and
+other public archive content as untrusted display data.
+
 Never include authentication tokens, real passwords, private VM images, or
 unredacted proprietary source in a report.

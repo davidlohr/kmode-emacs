@@ -25,6 +25,7 @@
 (require 'kmode-test)
 (require 'kmode-navigate)
 (require 'kmode-review)
+(require 'kmode-lore)
 (require 'kmode-flymake)
 (require 'kmode-impact)
 (require 'kmode-debug)
@@ -287,7 +288,8 @@ ROOT defaults to the current kernel worktree."
   (let ((map (make-sparse-keymap)))
     (define-key map (kbd ".") #'kmode-navigation-dwim)
     (define-key map (kbd "d") #'kmode-find-definition)
-    (define-key map (kbd "r") #'kmode-find-callers)
+    (define-key map (kbd "r") #'kmode-find-usages)
+    (define-key map (kbd "a") #'kmode-find-function-callers)
     (define-key map (kbd "b") #'kmode-navigation-back)
     (define-key map (kbd "i") #'kmode-follow-include)
     (define-key map (kbd "k") #'kmode-find-kbuild)
@@ -296,10 +298,23 @@ ROOT defaults to the current kernel worktree."
     (define-key map (kbd "h") #'kmode-toggle-header-source)
     (define-key map (kbd "D") #'kmode-grep-documentation)
     (define-key map (kbd "e") #'kmode-eglot-ensure)
+    (define-key map (kbd "l") #'kmode-lore-context-at-point)
     (define-key map (kbd "t") #'kmode-build-tags)
     (define-key map (kbd "C") kmode-cscope-map)
     map)
   "Prefix map for definitions, callers, and kernel-aware navigation.")
+
+(defvar kmode-lore-map
+  (let ((map (make-sparse-keymap)))
+    (define-key map (kbd ".") #'kmode-lore-context-at-point)
+    (define-key map (kbd "s") #'kmode-lore-search-symbol)
+    (define-key map (kbd "f") #'kmode-lore-search-file)
+    (define-key map (kbd "d") #'kmode-lore-search-directory)
+    (define-key map (kbd "q") #'kmode-lore-search)
+    (define-key map (kbd "w") #'kmode-lore-why)
+    (define-key map (kbd "c") #'kmode-lore-clear-cache)
+    map)
+  "Prefix map for explicit Lore mailing-list context searches.")
 
 (defvar kmode-vng-map
   (let ((map (make-sparse-keymap)))
@@ -329,6 +344,7 @@ ROOT defaults to the current kernel worktree."
     (define-key map (kbd "o") #'kmode-build-current-object)
     (define-key map (kbd "n") kmode-navigation-map)
     (define-key map (kbd "v") kmode-vng-map)
+    (define-key map (kbd "L") kmode-lore-map)
     (define-key map (kbd "d") #'kmode-navigation-dwim)
     (define-key map (kbd "c") #'kmode-find-config)
     (define-key map (kbd "h") #'kmode-toggle-header-source)
@@ -386,7 +402,8 @@ installing a permanent binding in `global-map'.")
     "---"
     ["Navigate at point" kmode-navigation-dwim t]
     ["Find definition" kmode-find-definition t]
-    ["Find references / callers" kmode-find-callers t]
+    ["Find usages / callers" kmode-find-usages t]
+    ["Find function callers" kmode-find-function-callers t]
     ["Navigation back" kmode-navigation-back t]
     ["Find CONFIG symbol" kmode-find-config t]
     ["Toggle source/header" kmode-toggle-header-source buffer-file-name]
@@ -399,6 +416,14 @@ installing a permanent binding in `global-map'.")
      ["Find symbol" kmode-cscope-find-symbol t]
      ["Find text" kmode-cscope-find-text t]
      ["Find includers" kmode-cscope-find-includers t])
+    ("Lore mailing-list context"
+     ["Context for symbol and file" kmode-lore-context-at-point buffer-file-name]
+     ["Why is this line here?" kmode-lore-why buffer-file-name]
+     ["Search symbol" kmode-lore-search-symbol t]
+     ["Search current file" kmode-lore-search-file buffer-file-name]
+     ["Search current directory" kmode-lore-search-directory t]
+     ["Custom public-inbox query" kmode-lore-search t]
+     ["Clear Lore cache" kmode-lore-clear-cache t])
     "---"
     ["Checkpatch file" kmode-checkpatch-file buffer-file-name]
     ["Toggle live checkpatch" kmode-checkpatch-flymake-mode

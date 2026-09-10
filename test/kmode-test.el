@@ -24,6 +24,37 @@
 (declare-function kmode-build-sparse "kmode-build")
 (declare-function kmode--dashboard-context "kmode-ui")
 (declare-function kmode--include-candidates "kmode-navigate")
+(declare-function kmode-lore--cache-file "kmode-lore")
+(declare-function kmode-lore--cache-key "kmode-lore")
+(declare-function kmode-lore--cache-read "kmode-lore")
+(declare-function kmode-lore--cache-write "kmode-lore" (results))
+(declare-function kmode-lore--context-query "kmode-lore" (symbol relative))
+(declare-function kmode-lore--file-query "kmode-lore" (relative))
+(declare-function kmode-lore--identifier-at-point "kmode-lore")
+(declare-function kmode-lore--make-result "kmode-lore" (&rest slots))
+(declare-function kmode-lore--origin-links "kmode-lore")
+(declare-function kmode-lore--parse-atom "kmode-lore" (start end scope))
+(declare-function kmode-lore--quote-term "kmode-lore" (value))
+(declare-function kmode-lore--request "kmode-lore" (&optional force))
+(declare-function kmode-lore--search-url "kmode-lore" (query offset order))
+(declare-function kmode-lore--start-search "kmode-lore" (query scope &optional force))
+(declare-function kmode-lore--status-header "kmode-lore")
+(declare-function kmode-lore--status-with-results "kmode-lore" (source results))
+(declare-function kmode-lore--symbol-query "kmode-lore" (symbol))
+(declare-function kmode-lore--trusted-origin-url "kmode-lore" (value))
+(declare-function kmode-lore--validate-query "kmode-lore" (query))
+(declare-function kmode-lore-clear-cache "kmode-lore")
+(declare-function kmode-lore--validate-symbol "kmode-lore" (symbol))
+(declare-function kmode-lore-context-at-point "kmode-lore")
+(declare-function kmode-lore-search-directory "kmode-lore")
+(declare-function kmode-lore-why "kmode-lore")
+(declare-function kmode-lore-result-author "kmode-lore" (result))
+(declare-function kmode-lore-result-date "kmode-lore" (result))
+(declare-function kmode-lore-result-message-id "kmode-lore" (result))
+(declare-function kmode-lore-result-scope "kmode-lore" (result))
+(declare-function kmode-lore-result-subject "kmode-lore" (result))
+(declare-function kmode-lore-result-url "kmode-lore" (result))
+(declare-function kmode-lore-results-mode "kmode-lore")
 (declare-function kmode--search-lines-with-rg "kmode-navigate")
 (declare-function kmode-impact--run-button "kmode-impact")
 (declare-function kmode-kselftest-collections "kmode-test")
@@ -33,10 +64,14 @@
 (declare-function kmode--write-git-diff "kmode-review")
 (declare-function kmode--config-at-point "kmode-navigate")
 (declare-function kmode-find-callers "kmode-navigate")
+(declare-function kmode-find-function-callers "kmode-navigate")
+(declare-function kmode-find-usages "kmode-navigate")
 (declare-function kmode-find-definition "kmode-navigate")
 (declare-function kmode-find-kbuild "kmode-navigate")
+(declare-function kmode--kernel-identifier-at-point "kmode-navigate")
 (declare-function kmode--line-include "kmode-navigate")
 (declare-function kmode-navigation-back "kmode-navigate")
+(declare-function kmode--select-usages-backend "kmode-navigate")
 (declare-function kmode--search-kconfig-fallback "kmode-navigate")
 (declare-function kmode-toggle-header-source "kmode-navigate")
 (declare-function kmode-kconfig--source-at-point "kmode-kconfig")
@@ -114,6 +149,25 @@
 (defvar kmode-impact-context)
 (defvar kmode-impact-origin)
 (defvar kmode-impact-root)
+(defvar kmode-lore--fetched-at)
+(defvar kmode-lore--offset)
+(defvar kmode-lore--order)
+(defvar kmode-lore--query)
+(defvar kmode-lore--request-buffer)
+(defvar kmode-lore--results)
+(defvar kmode-lore--scope)
+(defvar kmode-lore--status)
+(defvar kmode-lore--timeout-timer)
+(defvar kmode-lore-base-url)
+(defvar kmode-lore-cache-directory)
+(defvar kmode-lore-cache-ttl)
+(defvar kmode-lore-default-date-range)
+(defvar kmode-lore-max-query-length)
+(defvar kmode-lore-request-timeout)
+(defvar kmode-lore-result-limit)
+(defvar kmode-lore-results-mode-map)
+(defvar kmode-lore-map)
+(defvar kmode-lore-user-agent)
 (defvar kmode-global-mode)
 (defvar kmode-global-mode-map)
 (defvar kmode-command-map)
@@ -130,6 +184,8 @@
 (defvar kmode-clangd-arguments)
 (defvar kmode-cscope-map)
 (defvar kmode-kernel-fill-column)
+(defvar kmode-usages-backend)
+(defvar kmode-usages-text-files)
 (defvar kmode-require-final-newline)
 (defvar kmode-show-trailing-whitespace)
 (defvar kmode-checkpatch-flymake--output-buffer)
@@ -167,6 +223,11 @@
 (defvar tags-table-files)
 (defvar tags-table-list)
 
+(defvar url-http-end-of-headers)
+(defvar url-http-response-status)
+(defvar url-request-extra-headers)
+(defvar url-user-agent)
+
 (defvar kmode-test--dispatch-count 0
   "Number of times the dispatcher test command has run.")
 
@@ -190,6 +251,27 @@
           (directory-files kmode-test--project-root nil
                            "\\`kmode-.*\\.el\\'"))
   "Kmode-emacs modules discovered in and loaded from the checkout.")
+
+(defconst kmode-test--lore-atom
+  (concat
+   "<?xml version=\"1.0\" encoding=\"utf-8\"?>\n"
+   "<feed xmlns=\"http://www.w3.org/2005/Atom\">\n"
+   " <title>Kmode test results</title>\n"
+   " <entry>\n"
+   "  <author><name>Alice &amp; Bob</name></author>\n"
+   "  <title>[PATCH] Fix &amp; explain wakeups</title>\n"
+   "  <updated>2026-09-08T12:34:56Z</updated>\n"
+   "  <link rel=\"alternate\""
+   " href=\"https://lore.kernel.org/all/id%2Fpart@example.com/\"/>\n"
+   " </entry>\n"
+   " <entry>\n"
+   "  <title>Re: data structure lifetime</title>\n"
+   "  <updated>2025-01-02T03:04:05Z</updated>\n"
+   "  <link href=\"https://lore.kernel.org/all/second@example.net/\"/>\n"
+   " </entry>\n"
+   " <entry><title>Entry without a link</title></entry>\n"
+   "</feed>\n")
+  "Small offline Atom fixture for Lore parser and transport tests.")
 
 (dolist (feature kmode-test--optional-features)
   (let ((source (expand-file-name (concat (symbol-name feature) ".el")
@@ -2304,20 +2386,241 @@
   (should (eq (lookup-key kmode-navigation-map (kbd "d"))
               'kmode-find-definition))
   (should (eq (lookup-key kmode-navigation-map (kbd "r"))
-              'kmode-find-callers))
+              'kmode-find-usages))
+  (should (eq (lookup-key kmode-navigation-map (kbd "a"))
+              'kmode-find-function-callers))
   (should (eq (lookup-key kmode-navigation-map (kbd "b"))
               'kmode-navigation-back))
-  (let (calls)
+  (let ((kmode-usages-backend 'xref)
+        calls)
     (cl-letf (((symbol-function 'xref-find-definitions)
                (lambda () (interactive) (push 'definition calls)))
               ((symbol-function 'xref-find-references)
-               (lambda () (interactive) (push 'callers calls)))
+               (lambda (identifier)
+                 (push (list 'usages identifier) calls)))
               ((symbol-function 'xref-go-back)
                (lambda () (interactive) (push 'back calls))))
-      (call-interactively #'kmode-find-definition)
-      (call-interactively #'kmode-find-callers)
-      (call-interactively #'kmode-navigation-back))
-    (should (equal (nreverse calls) '(definition callers back)))))
+      (with-temp-buffer
+        (insert "wake_up_process")
+        (goto-char (point-min))
+        (call-interactively #'kmode-find-definition)
+        (call-interactively #'kmode-find-usages)
+        (kmode-find-callers "mutex_lock" 'xref)
+        (call-interactively #'kmode-navigation-back)))
+    (should
+     (equal (nreverse calls)
+            '(definition
+              (usages "wake_up_process")
+              (usages "mutex_lock")
+              back)))))
+
+(ert-deftest kmode-test/usages-extract-kernel-identifiers ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "navigation integration is not present"))
+  (dolist (case '(("struct task_struct" 1 "task_struct")
+                  ("typedef struct task_struct task_t;" 1 "task_struct")
+                  ("object->state" 9 "state")
+                  ("READ_ONCE(value)" 1 "READ_ONCE")
+                  ("global_value" 4 "global_value")))
+    (with-temp-buffer
+      (c-mode)
+      (insert (nth 0 case))
+      (goto-char (nth 1 case))
+      (should (equal (kmode--kernel-identifier-at-point) (nth 2 case))))))
+
+(ert-deftest kmode-test/usages-auto-backend-priority-is-honest ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "navigation integration is not present"))
+  (let (semantic cscope)
+    (cl-letf (((symbol-function 'kmode--eglot-semantic-references-p)
+               (lambda () semantic))
+              ((symbol-function 'kmode-cscope-available-p)
+               (lambda () cscope)))
+      (setq semantic t cscope t)
+      (should (eq (kmode--select-usages-backend 'auto) 'xref))
+      (setq semantic nil)
+      (should (eq (kmode--select-usages-backend 'auto) 'cscope))
+      (setq cscope nil)
+      (should (eq (kmode--select-usages-backend 'auto) 'text))
+      (should (eq (kmode--select-usages-backend 'xref) 'xref))
+      (should-error (kmode--select-usages-backend 'unknown)
+                    :type 'user-error))))
+
+(ert-deftest kmode-test/usages-cscope-passes-symbol-and-labels-results ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "navigation integration is not present"))
+  (let* ((cscope-output-buffer-name
+          (generate-new-buffer-name " *kmode-usages-cscope*"))
+         (result (get-buffer-create cscope-output-buffer-name))
+         observed)
+    (unwind-protect
+        (cl-letf (((symbol-function 'kmode-cscope-available-p)
+                   (lambda () t))
+                  ((symbol-function 'kmode--call-xcscope)
+                   (lambda (command &optional identifier)
+                     (setq observed (list command identifier)))))
+          (kmode-find-usages "task_struct" 'cscope)
+          (should
+           (equal observed '(cscope-find-this-symbol "task_struct")))
+          (with-current-buffer result
+            (should (equal (buffer-name) cscope-output-buffer-name))
+            (should (string-match-p
+                     "task_struct" (format "%s" header-line-format)))
+            (should (string-match-p
+                     "not semantic" (format "%s" header-line-format)))))
+      (when (buffer-live-p result)
+        (kill-buffer result)))))
+
+(ert-deftest kmode-test/usages-text-fallback-is-visibly-labelled ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "navigation integration is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((result (generate-new-buffer " *kmode-usages-text*"))
+           (next-error-last-buffer nil)
+           observed defaults-called)
+      (unwind-protect
+          (with-temp-buffer
+            (setq default-directory (file-name-as-directory root))
+            (cl-letf (((symbol-function 'rgrep)
+                       (lambda (regexp files directory &optional _confirm)
+                         (setq observed (list regexp files directory)
+                               next-error-last-buffer result)))
+                      ((symbol-function 'grep-compute-defaults)
+                       (lambda () (setq defaults-called t)))
+                      ((symbol-function 'kmode-tool-path)
+                       (lambda (tool &optional _context)
+                         (should (equal tool "rg"))
+                         nil)))
+              (kmode-find-usages "wake_up_process" 'text))
+            (should defaults-called)
+            (should (equal (nth 1 observed) kmode-usages-text-files))
+            (should (equal (nth 2 observed) (file-name-as-directory root)))
+            (should (string-match-p "wake_up_process" (car observed)))
+            (with-current-buffer result
+              (should (string-match-p
+                       "\\`\\*kmode textual usages: wake_up_process\\*"
+                       (buffer-name)))
+              (should (string-match-p
+                       "TEXT MATCHES" (format "%s" header-line-format)))
+              (should (string-match-p
+                       "not semantic" (format "%s" header-line-format)))))
+        (when (buffer-live-p result)
+          (kill-buffer result))))))
+
+(ert-deftest kmode-test/usages-prefers-async-safely-quoted-ripgrep ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "navigation integration is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (let* ((result (generate-new-buffer " *kmode-usages-rg*"))
+           (kmode-usages-text-files "*.c *.h")
+           observed)
+      (unwind-protect
+          (with-temp-buffer
+            (setq default-directory (file-name-as-directory root))
+            (cl-letf
+                (((symbol-function 'kmode-tool-path)
+                  (lambda (tool &optional _context)
+                    (should (equal tool "rg"))
+                    "/host/bin/rg"))
+                 ((symbol-function 'rgrep)
+                  (lambda (&rest _arguments)
+                    (ert-fail "rgrep must not run when rg is available")))
+                 ((symbol-function 'compilation-start)
+                  (lambda (command mode name-function &rest _arguments)
+                    (setq observed
+                          (list command mode (funcall name-function "grep")))
+                    result)))
+              (kmode-find-usages "wake_up_process" 'text))
+            (should
+             (equal
+              (nth 0 observed)
+              (mapconcat
+               #'shell-quote-argument
+               '("/host/bin/rg" "--no-config" "--line-number" "--no-heading"
+                 "--with-filename" "--color" "never" "--fixed-strings"
+                 "--word-regexp" "--glob" "*.c" "--glob" "*.h"
+                 "--" "wake_up_process" ".")
+               " ")))
+            (should (eq (nth 1 observed) 'grep-mode))
+            (should (string-match-p
+                     "kmode textual usages: wake_up_process" (nth 2 observed)))
+            (with-current-buffer result
+              (should (string-match-p
+                       "RIPGREP TEXT MATCHES"
+                       (format "%s" header-line-format)))))
+        (when (buffer-live-p result)
+          (kill-buffer result))))))
+
+(ert-deftest kmode-test/usages-forced-missing-cscope-is-actionable ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "navigation integration is not present"))
+  (cl-letf (((symbol-function 'kmode-cscope-available-p)
+             (lambda () nil)))
+    (should-error (kmode-find-usages "mutex_lock" 'cscope)
+                  :type 'user-error)))
+
+(ert-deftest kmode-test/function-callers-prefers-dedicated-cscope-query ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "navigation integration is not present"))
+  (let* ((cscope-output-buffer-name
+          (generate-new-buffer-name " *kmode-callers-cscope*"))
+         (result (get-buffer-create cscope-output-buffer-name))
+         semantic-checked observed)
+    (unwind-protect
+        (cl-letf (((symbol-function 'kmode-cscope-available-p)
+                   (lambda () t))
+                  ((symbol-function 'kmode--eglot-semantic-references-p)
+                   (lambda () (setq semantic-checked t)))
+                  ((symbol-function 'kmode--call-xcscope)
+                   (lambda (command &optional identifier)
+                     (setq observed (list command identifier)))))
+          (kmode-find-function-callers "wake_up_process")
+          (should-not semantic-checked)
+          (should
+           (equal observed
+                  '(cscope-find-functions-calling-this-function
+                    "wake_up_process")))
+          (with-current-buffer result
+            (should (equal (buffer-name) cscope-output-buffer-name))
+            (should (string-match-p
+                     "wake_up_process" (format "%s" header-line-format)))
+            (should (string-match-p
+                     "FUNCTION CALLERS" (format "%s" header-line-format)))))
+      (when (buffer-live-p result)
+        (kill-buffer result)))))
+
+(ert-deftest kmode-test/function-callers-falls-back-to-references-then-text ()
+  (unless (featurep 'kmode-navigate)
+    (ert-skip "navigation integration is not present"))
+  (let ((result (generate-new-buffer " *kmode-callers-text*"))
+        semantic references textual)
+    (unwind-protect
+        (cl-letf (((symbol-function 'kmode-cscope-available-p)
+                   (lambda () nil))
+                  ((symbol-function 'kmode--eglot-semantic-references-p)
+                   (lambda () semantic))
+                  ((symbol-function 'xref-find-references)
+                   (lambda (identifier) (setq references identifier)))
+                  ((symbol-function 'kmode--find-textual-usages)
+                   (lambda (identifier)
+                     (setq textual identifier)
+                     result)))
+          (setq semantic t)
+          (kmode-find-function-callers "mutex_lock")
+          (should (equal references "mutex_lock"))
+          (should-not textual)
+          (setq semantic nil references nil)
+          (kmode-find-function-callers "mutex_unlock")
+          (should-not references)
+          (should (equal textual "mutex_unlock"))
+          (with-current-buffer result
+            (should (string-match-p
+                     "textual caller candidates: mutex_unlock"
+                     (buffer-name)))
+            (should (string-match-p
+                     "non-call uses" (format "%s" header-line-format)))))
+      (when (buffer-live-p result)
+        (kill-buffer result)))))
 
 (ert-deftest kmode-test/navigation-back-supports-emacs-28-xref ()
   (unless (featurep 'kmode-navigate)
@@ -4038,6 +4341,465 @@
               cscope-find-called-functions
               cscope-find-this-text-string
               cscope-find-files-including-file)))))
+
+(ert-deftest kmode-test/lore-query-construction-is-scoped-and-escaped ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (let ((kmode-lore-default-date-range "5.years.ago.."))
+    (should
+     (equal (kmode-lore--quote-term "name\\\"part")
+            "\"name\\\\\\\"part\""))
+    (let ((query (kmode-lore--symbol-query "wake_up_process")))
+      (dolist (field '("s:" "nq:" "dfhh:" "dfa:" "dfb:" "dfctx:"))
+        (should (string-match-p
+                 (regexp-quote (concat field "\"wake_up_process\""))
+                 query)))
+      (should (string-suffix-p "AND rt:5.years.ago.." query)))
+    (should
+     (equal (kmode-lore--file-query "drivers/net/a b.c")
+            "(dfn:\"drivers/net/a b.c\") AND rt:5.years.ago.."))
+    (let ((query
+           (kmode-lore--context-query
+            "wake_up_process" "kernel/workqueue.c")))
+      (should (string-match-p
+               (regexp-quote "dfn:\"kernel/workqueue.c\"") query))
+      (should (string-match-p
+               (regexp-quote "dfhh:\"wake_up_process\"") query))
+      (should (string-match-p
+               (regexp-quote "nq:\"wake_up_process\"") query))))
+  (let ((kmode-lore-default-date-range nil))
+    (should-not
+     (string-match-p "rt:" (kmode-lore--symbol-query "wake_up_process")))))
+
+(ert-deftest kmode-test/lore-query-validation-rejects-unsafe-input ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (should (equal (kmode-lore--validate-query "  s:sched  ") "s:sched"))
+  (should-error (kmode-lore--validate-query "") :type 'user-error)
+  (should-error (kmode-lore--validate-query "s:foo\nbar")
+                :type 'user-error)
+  (let ((kmode-lore-max-query-length 4))
+    (should-error (kmode-lore--validate-query "abcde")
+                  :type 'user-error)))
+
+(ert-deftest kmode-test/lore-identifier-skips-c-type-tags ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (dolist (case '(("struct task_struct *task;" . "task_struct")
+                  ("union sched_class_data value;" . "sched_class_data")
+                  ("enum migration_status state;" . "migration_status")))
+    (with-temp-buffer
+      (c-mode)
+      (insert (car case))
+      (goto-char (point-min))
+      (should (equal (kmode-lore--identifier-at-point) (cdr case)))))
+  (with-temp-buffer
+    (insert "work_struct")
+    (let ((transient-mark-mode t))
+      (set-mark (point-min))
+      (goto-char (point-max))
+      (setq mark-active t)
+      (should (equal (kmode-lore--identifier-at-point) "work_struct"))))
+  (with-temp-buffer
+    (insert "not an identifier")
+    (let ((transient-mark-mode t))
+      (set-mark (point-min))
+      (goto-char (point-max))
+      (setq mark-active t)
+      (should-not (kmode-lore--identifier-at-point)))))
+
+(ert-deftest kmode-test/lore-search-url-encodes-query-and-page-state ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (let ((kmode-lore-base-url "https://lore.kernel.org/all")
+        (kmode-lore-result-limit 7))
+    (should
+     (equal
+      (kmode-lore--search-url
+       "dfn:\"drivers/a b.c\" AND x:y&z" 14 'relevance)
+      (concat
+       "https://lore.kernel.org/all/"
+       "?q=dfn%3A%22drivers%2Fa%20b.c%22%20AND%20x%3Ay%26z"
+       "&x=A&l=7&o=14&t=1&r=1")))
+    (should-not
+     (string-match-p
+      "&r=1"
+      (kmode-lore--search-url "s:sched" 0 'date)))))
+
+(ert-deftest kmode-test/lore-atom-parser-decodes-compact-results ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (with-temp-buffer
+    (insert kmode-test--lore-atom)
+    (let ((results
+           (kmode-lore--parse-atom
+            (point-min) (point-max) "symbol")))
+      (should (= (length results) 2))
+      (let ((first (nth 0 results))
+            (second (nth 1 results)))
+        (should
+         (equal (kmode-lore-result-message-id first)
+                "id/part@example.com"))
+        (should
+         (equal (kmode-lore-result-subject first)
+                "[PATCH] Fix & explain wakeups"))
+        (should (equal (kmode-lore-result-author first) "Alice & Bob"))
+        (should
+         (equal (kmode-lore-result-date first)
+                "2026-09-08T12:34:56Z"))
+        (should (equal (kmode-lore-result-scope first) "symbol"))
+        (should
+         (equal (kmode-lore-result-url second)
+                "https://lore.kernel.org/all/second@example.net/"))
+        (should (equal (kmode-lore-result-author second) "(unknown)")))))
+  (with-temp-buffer
+    (insert "<?xml version=\"1.0\"?><not-a-feed/>")
+    (should-error
+     (kmode-lore--parse-atom (point-min) (point-max) "query"))))
+
+(ert-deftest kmode-test/lore-cache-round-trips-results-with-safe-modes ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (let* ((directory (make-temp-file "kmode-lore-cache-" t))
+         (kmode-lore-cache-directory
+          (file-name-as-directory directory))
+         (kmode-lore-cache-ttl 3600)
+         (result
+          (kmode-lore--make-result
+           :message-id "id@example.com"
+           :subject "[PATCH] scheduler change"
+           :author "Kernel Hacker"
+           :date "2026-09-08T01:02:03Z"
+           :url "https://lore.kernel.org/all/id@example.com/"
+           :scope "context")))
+    (unwind-protect
+        (with-temp-buffer
+          (setq-local kmode-lore--query "s:scheduler")
+          (setq-local kmode-lore--offset 0)
+          (setq-local kmode-lore--order 'date)
+          (kmode-lore--cache-write (list result))
+          (let* ((file (kmode-lore--cache-file))
+                 (cached (kmode-lore--cache-read))
+                 (decoded (car (plist-get cached :results))))
+            (should (file-regular-p file))
+            (should (= (logand (file-modes directory) #o777) #o700))
+            (should (= (logand (file-modes file) #o777) #o600))
+            (should (plist-get cached :fresh))
+            (should
+             (equal (kmode-lore-result-message-id decoded)
+                    "id@example.com"))
+            (should
+             (equal (kmode-lore-result-subject decoded)
+                    "[PATCH] scheduler change"))
+            (should (equal (kmode-lore-result-scope decoded) "context"))
+            (let ((kmode-lore-cache-ttl -1))
+              (should-not
+               (plist-get (kmode-lore--cache-read) :fresh)))))
+      (ignore-errors (delete-directory directory t)))))
+
+(ert-deftest kmode-test/lore-cache-clear-is-contained-and-symlink-safe ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (let* ((base (make-temp-file "kmode-lore-clear-" t))
+         (directory (expand-file-name "cache/" base))
+         (kmode-lore-cache-directory directory)
+         (valid
+          (expand-file-name
+           (format "kmode-lore-%s.json" (make-string 64 ?a))
+           directory))
+         (link
+          (expand-file-name
+           (format "kmode-lore-%s.json" (make-string 64 ?b))
+           directory))
+         (unrelated (expand-file-name "notes.json" directory))
+         (outside (expand-file-name "outside.json" base)))
+    (unwind-protect
+        (progn
+          (make-directory directory t)
+          (with-temp-file valid (insert "{}\n"))
+          (with-temp-file unrelated (insert "keep\n"))
+          (with-temp-file outside (insert "outside\n"))
+          (make-symbolic-link outside link)
+          (kmode-lore-clear-cache)
+          (should-not (file-exists-p valid))
+          (should (file-exists-p unrelated))
+          (should (file-symlink-p link))
+          (should (file-exists-p outside)))
+      (ignore-errors (delete-directory base t)))))
+
+(ert-deftest kmode-test/lore-symbol-validation-is-explicit ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (should (equal (kmode-lore--validate-symbol " wake_up_process ")
+                 "wake_up_process"))
+  (dolist (value '(nil "" "two symbols" "bad-name" "line\nbreak"))
+    (should-error (kmode-lore--validate-symbol value) :type 'user-error))
+  (should-error (kmode-lore--symbol-query "") :type 'user-error))
+
+(ert-deftest kmode-test/lore-origin-url-trust-and-legacy-normalization ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (should
+   (equal
+    (kmode-lore--trusted-origin-url
+     "<https://lkml.kernel.org/r/id%2Fpart@example.com>")
+    "https://lore.kernel.org/all/id%2Fpart%40example.com/"))
+  (should
+   (equal
+    (kmode-lore--trusted-origin-url
+     "https://lore.kernel.org/all/native@example.com/")
+    "https://lore.kernel.org/all/native@example.com/"))
+  (dolist (url '("http://lore.kernel.org/all/nope/"
+                 "https://lore.kernel.org.evil.invalid/all/nope/"
+                 "https://evil.invalid/lore.kernel.org/all/nope/"
+                 "https://lkml.kernel.org/not-r/nope@example.com"))
+    (should-not (kmode-lore--trusted-origin-url url))))
+
+(ert-deftest kmode-test/lore-cache-key-includes-scope-and-page-size ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (with-temp-buffer
+    (setq-local kmode-lore--query "s:wakeup")
+    (setq-local kmode-lore--scope "symbol")
+    (setq-local kmode-lore--offset 0)
+    (setq-local kmode-lore--order 'date)
+    (let* ((kmode-lore-result-limit 20)
+           (symbol-20 (kmode-lore--cache-key))
+           (symbol-10
+            (let ((kmode-lore-result-limit 10))
+              (kmode-lore--cache-key)))
+           (file-20
+            (progn
+              (setq-local kmode-lore--scope "file")
+              (kmode-lore--cache-key))))
+      (should-not (equal symbol-20 symbol-10))
+      (should-not (equal symbol-20 file-20)))))
+
+(ert-deftest kmode-test/lore-status-shows-freshness-and-empty-hint ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (let ((kmode-lore--status "cached")
+        (kmode-lore--fetched-at 0.0)
+        (kmode-lore--offset 0)
+        (kmode-lore--order 'date)
+        (kmode-lore--query "s:wakeup")
+        (kmode-lore-result-limit 20))
+    (should
+     (string-match-p "fetched 1970-01-01 00:00 UTC"
+                     (kmode-lore--status-header))))
+  (should
+   (string-match-p
+    "press s to edit"
+    (kmode-lore--status-with-results "live" nil)))
+  (should (equal (kmode-lore--status-with-results "live" '(result))
+                 "live")))
+
+(ert-deftest kmode-test/lore-global-context-can-be-symbol-only ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (with-temp-buffer
+    (insert "wake_up_process")
+    (goto-char (point-min))
+    (let (query scope)
+      (cl-letf (((symbol-function 'kmode-root)
+                 (lambda (&optional noerror)
+                   (should noerror)
+                   nil))
+                ((symbol-function 'kmode-lore--start-search)
+                 (lambda (value label &optional _force)
+                   (setq query value scope label))))
+        (kmode-lore-context-at-point))
+      (should (equal scope "context"))
+      (should (string-match-p "wake_up_process" query))
+      (should-not (string-match-p "dfn:" query)))))
+
+(ert-deftest kmode-test/lore-why-falls-back-for-unsafe-provenance ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (dolist (modified '(t nil))
+    (with-temp-buffer
+      (insert "wake_up_process")
+      (set-buffer-modified-p modified)
+      (let (fallback origin-called)
+        (cl-letf (((symbol-function 'kmode-lore--origin-links)
+                   (lambda ()
+                     (setq origin-called t)
+                     (user-error "not tracked")))
+                  ((symbol-function 'kmode-lore-context-at-point)
+                   (lambda () (setq fallback t))))
+          (kmode-lore-why))
+        (should fallback)
+        (should (eq origin-called (not modified)))))))
+
+(ert-deftest kmode-test/lore-root-directory-query-drops-dot-slash ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (with-temp-buffer
+      (setq default-directory (file-name-as-directory root))
+      (let ((kmode-lore-default-date-range nil)
+            query)
+        (cl-letf (((symbol-function 'kmode-lore--start-search)
+                   (lambda (value _scope &optional _force)
+                     (setq query value))))
+          (kmode-lore-search-directory))
+        (should (equal query "dfn:\"*\""))))))
+
+(ert-deftest kmode-test/lore-origin-links-use-blame-and-trusted-trailers ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (kmode-test-with-kernel-tree (root)
+    (with-temp-buffer
+      (setq default-directory (file-name-as-directory root))
+      (setq buffer-file-name
+            (expand-file-name "drivers/net/kmode_dummy.c" root))
+      (insert "int kmode_dummy;\n")
+      (goto-char (point-min))
+      (let (calls)
+        (cl-letf
+            (((symbol-function 'kmode-lore--git-output)
+              (lambda (arguments)
+                (push arguments calls)
+                (if (equal (car arguments) "blame")
+                    (concat (make-string 40 ?a) " 1 1 1\n")
+                  (concat
+                   "Explain the change\n\n"
+                   "Link: <https://lore.kernel.org/all/first@example.com/>\n"
+                   "Link: https://example.com/not-lore\n"
+                   "link: https://lore.kernel.org/lkml/second@example.net/\n"
+                   "Link: https://lkml.kernel.org/r/legacy@example.org\n"
+                   "Link: https://lore.kernel.org.evil.invalid/all/nope/\n"
+                   "Link: https://lore.kernel.org/all/first@example.com/\n")))))
+          (should
+           (equal
+            (kmode-lore--origin-links)
+            '("https://lore.kernel.org/all/first@example.com/"
+              "https://lore.kernel.org/lkml/second@example.net/"
+              "https://lore.kernel.org/all/legacy%40example.org/"))))
+        (setq calls (nreverse calls))
+        (should
+         (equal
+          (car calls)
+          '("blame" "--porcelain" "-L" "1,1" "--"
+            "drivers/net/kmode_dummy.c")))
+        (should
+         (equal
+          (cadr calls)
+          (list "show" "-s" "--format=%B" (make-string 40 ?a)))))
+      (cl-letf
+          (((symbol-function 'kmode-lore--git-output)
+            (lambda (_arguments)
+              (concat (make-string 40 ?0) " 1 1 1\n"))))
+        (should-not (kmode-lore--origin-links))))))
+
+(ert-deftest kmode-test/lore-actions-and-result-bindings-are-discoverable ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (should (eq (lookup-key kmode-command-map (kbd "L")) kmode-lore-map))
+  (should (eq (lookup-key kmode-navigation-map (kbd "l"))
+              (quote kmode-lore-context-at-point)))
+  (dolist (binding '(("." . kmode-lore-context-at-point)
+                     ("s" . kmode-lore-search-symbol)
+                     ("f" . kmode-lore-search-file)
+                     ("d" . kmode-lore-search-directory)
+                     ("q" . kmode-lore-search)
+                     ("w" . kmode-lore-why)
+                     ("c" . kmode-lore-clear-cache)))
+    (should (eq (lookup-key kmode-lore-map (kbd (car binding)))
+                (cdr binding))))
+  (dolist (entry '((lore-context kmode-lore-context-at-point)
+                   (lore-why kmode-lore-why)
+                   (lore-file kmode-lore-search-file)
+                   (lore-search kmode-lore-search)))
+    (let ((action
+           (seq-find
+            (lambda (candidate)
+              (eq (kmode-action-id candidate) (car entry)))
+            (kmode-actions t))))
+      (should action)
+      (should (eq (kmode-action-command action) (cadr entry)))
+      (should (equal (kmode-action-group action) "Review"))))
+  (dolist (binding '(("RET" . kmode-lore-open-message)
+                     ("o" . kmode-lore-browse-message)
+                     ("T" . kmode-lore-browse-thread)
+                     ("w" . kmode-lore-copy-url)
+                     ("m" . kmode-lore-copy-message-id)
+                     ("g" . kmode-lore-refresh)
+                     ("N" . kmode-lore-next-page)
+                     ("P" . kmode-lore-previous-page)
+                     ("r" . kmode-lore-toggle-order)))
+    (should
+     (eq (lookup-key kmode-lore-results-mode-map
+                     (kbd (car binding)))
+         (cdr binding)))))
+
+(ert-deftest kmode-test/lore-request-is-asynchronous-and-network-is-mocked ()
+  (unless (featurep 'kmode-lore)
+    (ert-skip "kmode-lore.el is not present"))
+  (let* ((directory (make-temp-file "kmode-lore-request-" t))
+         (kmode-lore-cache-directory
+          (file-name-as-directory directory))
+         (kmode-lore-base-url "https://lore.kernel.org/all/")
+         (kmode-lore-result-limit 2)
+         (kmode-lore-request-timeout 60)
+         (target (generate-new-buffer " *kmode-lore-request-test*"))
+         (response (generate-new-buffer " *kmode-lore-response-test*"))
+         callback callback-arguments requested-url requested-agent
+         requested-headers requested-silent requested-inhibit-cookies)
+    (unwind-protect
+        (progn
+          (with-current-buffer target
+            (kmode-lore-results-mode)
+            (setq-local kmode-lore--query "s:wakeup")
+            (setq-local kmode-lore--scope "query")
+            (setq-local kmode-lore--offset 0)
+            (setq-local kmode-lore--order 'date)
+            (cl-letf
+                (((symbol-function 'url-retrieve)
+                  (lambda (url function arguments
+                               &optional silent inhibit-cookies)
+                    (setq requested-url url
+                          callback function
+                          callback-arguments arguments
+                          requested-agent url-user-agent
+                          requested-headers url-request-extra-headers
+                          requested-silent silent
+                          requested-inhibit-cookies inhibit-cookies)
+                    response)))
+              (kmode-lore--request t))
+            (should (equal kmode-lore--status "loading"))
+            (should (eq kmode-lore--request-buffer response)))
+          (should
+           (equal requested-url
+                  (concat
+                   "https://lore.kernel.org/all/"
+                   "?q=s%3Awakeup&x=A&l=2&o=0&t=1")))
+          (should (equal requested-agent kmode-lore-user-agent))
+          (should
+           (equal requested-headers
+                  '(("Accept" . "application/atom+xml"))))
+          (should requested-silent)
+          (should requested-inhibit-cookies)
+          (with-current-buffer response
+            (insert "HTTP/1.1 200 OK\r\nContent-Type: application/atom+xml\r\n\r\n")
+            (setq-local url-http-response-status 200)
+            (setq-local url-http-end-of-headers (copy-marker (point)))
+            (insert kmode-test--lore-atom)
+            (apply callback nil callback-arguments))
+          (should-not (buffer-live-p response))
+          (with-current-buffer target
+            (should (equal kmode-lore--status "live"))
+            (should (= (length kmode-lore--results) 2))
+            (should (= (length tabulated-list-entries) 2))
+            (should-not kmode-lore--request-buffer)
+            (should-not kmode-lore--timeout-timer)
+            (should (numberp kmode-lore--fetched-at))
+            (should (file-regular-p (kmode-lore--cache-file)))))
+      (when (buffer-live-p response)
+        (kill-buffer response))
+      (when (buffer-live-p target)
+        (kill-buffer target))
+      (ignore-errors (delete-directory directory t)))))
 
 (ert-deftest kmode-test/compilation-reinitialization-preserves-ownership ()
   (with-temp-buffer

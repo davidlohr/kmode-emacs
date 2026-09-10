@@ -7,13 +7,28 @@ project is pre-release; interfaces may change before 1.0.
 
 ### Added
 
+- Explicit, read-only Lore/public-inbox context under `C-c k L`, including
+  symbol, file, directory, and symbol-plus-file searches; blame-aware trusted
+  `Link:` provenance; an asynchronous tabulated result browser; five-year
+  default queries; and bounded fresh/stale caches separate from symbol
+  indexes.  Point movement never performs network I/O, only query terms and
+  kernel-relative paths are sent, and the integration never applies patches
+  or sends mail.  `C-c k n l` is the context-at-point shortcut.
+- Universal identifier usage lookup on `C-c k n r` for functions, types,
+  fields, macros, and globals.  Automatic selection prefers active
+  Eglot/clangd semantic references, then profile-local cscope occurrences,
+  then an asynchronous ripgrep/recursive-grep search with persistent
+  precision labels.  `C-c k n a` prefers cscope's dedicated indexed function
+  caller query and otherwise labels semantic or textual caller candidates;
+  `C-c k n C r` remains the direct cscope command.
 - An explicitly enabled global `C-c k` launcher.  `C-c k k` uses the current
   kernel root, otherwise reuses the last valid session root, tries
   `kmode-default-root`, or prompts; `kmode-select-root` / `C-c k R` selects a
   new remembered root and a dashboard prefix argument always prompts.  These
-  are the only outside-tree entry points; other prefix commands require a
-  kernel buffer or dashboard context.  Buffer-local editing behavior remains
-  restricted to recognized kernel-tree files.
+  establish kernel context outside a tree; explicit Lore symbol, custom-query,
+  and symbol-only context searches can run globally without one.  Other
+  prefix commands require a kernel buffer or dashboard context.  Buffer-local
+  editing behavior remains restricted to recognized kernel-tree files.
 - Profile-aware kernel index generation: `kmode-build-tags` / `C-c k n t`
   runs `make TAGS`, and `kmode-build-cscope` / `C-c k n C b` runs
   `make cscope`.  `kmode-auto-activate-tags` optionally binds the selected

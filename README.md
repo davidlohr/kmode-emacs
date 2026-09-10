@@ -3,7 +3,7 @@
 [![CI](https://github.com/davidlohr/kmode-emacs/actions/workflows/ci.yml/badge.svg)](https://github.com/davidlohr/kmode-emacs/actions/workflows/ci.yml)
 
 `kmode-emacs` is a Linux-kernel development environment for Emacs.  It connects one
-resolved kernel build profile to Kbuild, navigation, patch checks, tests,
+resolved kernel build profile to Kbuild, navigation, mailing-list context, patch checks, tests,
 kernel logs, QEMU, virtme-ng, and GDB while keeping the external commands
 visible and reproducible.
 
@@ -25,9 +25,9 @@ recorded from the author's real `~/.emacs` against `~/code/linux`.  It uses
 the global launcher, dashboard, Doctor, Etags/Xref, CONFIG-aware navigation,
 include resolution, header/source switching, Kbuild lookup, and keymap help.
 
-| Flight deck — `C-c k k` | Implementation and callers — `C-c k n r` |
+| Flight deck — `C-c k k` | Implementation and usages — `C-c k n r` |
 | --- | --- |
-| [![Kmode flight deck beside a live kernel source buffer](docs/screenshots/01-flight-deck.png)](docs/screenshots/01-flight-deck.png) | [![wake_up_process implementation beside its Xref callers](docs/screenshots/02-implementation-callers.png)](docs/screenshots/02-implementation-callers.png) |
+| [![Kmode flight deck beside a live kernel source buffer](docs/screenshots/01-flight-deck.png)](docs/screenshots/01-flight-deck.png) | [![wake_up_process implementation beside its usage results](docs/screenshots/02-implementation-callers.png)](docs/screenshots/02-implementation-callers.png) |
 | CONFIG-aware navigation — `C-c k n .` | Read-only change-impact plan — `C-u C-c k i` |
 | [![CONFIG_PREEMPT_DYNAMIC use beside its Kconfig definition](docs/screenshots/03-config-navigation.png)](docs/screenshots/03-config-navigation.png) | [![Kmode change-impact plan for a real kernel commit](docs/screenshots/04-change-impact.png)](docs/screenshots/04-change-impact.png) |
 | Exact virtme-ng command plan — `C-c k v s` | |
@@ -86,8 +86,13 @@ Documentation map:
   report-only Coccinelle, the kernel Clang analyzer, and checkstack.
 - Kernel-aware include, Kconfig, Kbuild, source/header, and Documentation
   navigation; profile-aware TAGS and cscope generation; standard Xref;
-  optional xcscope definition/call-graph/search commands; and Eglot/clangd
-  integration under a dedicated `C-c k n` shortcut map.
+  an honest usages/caller cascade; optional xcscope
+  definition/call-graph/search commands; and Eglot/clangd integration under a
+  dedicated `C-c k n` shortcut map.
+- Explicit, read-only [Lore](https://lore.kernel.org/all/) searches for the
+  symbol, file, directory, or current symbol-plus-file context; blame-aware
+  `Link:` discovery; and an in-Emacs, cached public-inbox result browser.
+  Nothing is looked up merely because point moves.
 - `checkpatch.pl`, `get_maintainer.pl`, `git range-diff`, patch export, and an
   advisory pre-submission flight check.  Nothing sends mail.
 - Opt-in asynchronous Flymake diagnostics for unsaved C, assembly, and Rust
@@ -127,8 +132,9 @@ libraries shipped with Emacs.  External capabilities are independent:
 | Capability | Required component | Behavior when absent |
 | --- | --- | --- |
 | Kernel builds/config/compile DB | `make` and a configured kernel tree | Build actions are unavailable; editing/navigation still work |
-| Fast file and Kconfig lookup | `rg` | Kconfig lookup and file discovery use slower Emacs fallbacks where implemented |
-| Semantic C navigation | Eglot and `clangd` | Xref/grep/include/Kconfig navigation remains available |
+| Fast file, Kconfig, and textual-usage lookup | `rg` | Kconfig/file lookup uses slower Emacs fallbacks; usage search uses asynchronous `rgrep` |
+| Semantic C navigation | Eglot and `clangd` | Usage lookup tries the selected profile's cscope database, then a clearly labeled text search |
+| Lore mailing-list context | HTTPS access to the configured public-inbox, by default `lore.kernel.org` | A stale cached result page is labeled `STALE` when available; all local workflows remain usable |
 | Review/live checks | executable tree-local `scripts/checkpatch.pl`, `scripts/get_maintainer.pl`, and Git as applicable | Only the affected actions fail or disappear |
 | Kernel TAGS generation | `make`, Etags, and a tree whose Makefile supports `TAGS` | Missing executables make generation unavailable; an absent target fails visibly in Compilation; other navigation remains available |
 | Kernel cscope generation | `make`, `cscope`, and a tree whose Makefile supports `cscope` | Missing executables make generation unavailable; an absent target fails visibly in Compilation; an existing database remains queryable when the adapter requirements are met |
@@ -174,8 +180,9 @@ stack.  The current integration boundary is explicit:
 | --- | --- |
 | CC Mode | In `c-mode`, Kmode layers the kernel documentation's complete offset table—including tab-only argument-list continuation and closing—on the built-in `linux` style.  It sets an 80-column fill target by default and restores prior local values on disable.  `kmode-kernel-fill-column`, `kmode-show-trailing-whitespace`, and `kmode-require-final-newline` control the corresponding buffer-local policy. |
 | TAGS/Etags | `kmode-build-tags` (`C-c k n t`) runs the kernel's `TAGS` target for the selected profile.  When `kmode-auto-activate-tags` is non-nil (the default), Kmode activates a readable table from that profile's output in kernel buffers.  It does not pretend that Etags references are semantic callers. |
-| Eglot/clangd | `kmode-eglot-ensure` uses the selected profile's explicit compilation-database directory.  `kmode-clangd-arguments` defaults to background indexing, detailed completion, and disabled header insertion; `--clang-tidy` remains an explicit opt-in. |
+| Eglot/clangd | `kmode-eglot-ensure` uses the selected profile's explicit compilation-database directory.  When Eglot manages the current buffer, `kmode-find-usages` prefers its semantic references.  `kmode-clangd-arguments` defaults to background indexing, detailed completion, and disabled header insertion; `--clang-tidy` remains an explicit opt-in. |
 | xcscope | `kmode-build-cscope` runs the kernel's `make cscope` target.  If `xcscope.el`, `cscope`, and a profile database are available, the `C-c k n C` adapter binds the resolved program, database directory, and kernel mode only for each call.  Kmode never globally configures xcscope. |
+| Lore/public-inbox | `C-c k L` performs explicit, read-only Atom searches and presents results in Emacs.  It uses only Emacs libraries and does not replace Gnus, Notmuch, or b4. |
 | consult-cscope | Not owned or invoked by Kmode.  Existing user configuration remains independent. |
 | TRAMP | Remote editing and remote process execution are not currently supported or tested.  Do not assume that a locally resolved build profile is safe for a TRAMP checkout. |
 | diff-hl/git-gutter | Kmode neither enables nor configures a diff gutter.  These remain user-owned UI choices. |
@@ -264,6 +271,7 @@ the dashboard.
 | `C-c k b` / `o` | `kmode-build` / `kmode-build-current-object` |
 | `C-c k n` | Kernel navigation prefix map |
 | `C-c k n C` | Optional profile-aware xcscope prefix map |
+| `C-c k L` | Lore mailing-list context prefix map |
 | `C-c k v` | virtme-ng build/run/debug prefix map |
 | `C-c k d` / `c` / `h` | DWIM navigation / find Kconfig / source-header toggle |
 | `C-c k r` / `f` | checkpatch current file / toggle live checkpatch diagnostics |
@@ -277,7 +285,9 @@ The navigation map is:
 | --- | --- |
 | `C-c k n .` | `kmode-navigation-dwim` |
 | `C-c k n d` | `kmode-find-definition` |
-| `C-c k n r` | `kmode-find-callers` |
+| `C-c k n r` | `kmode-find-usages` |
+| `C-c k n a` | `kmode-find-function-callers` |
+| `C-c k n l` | `kmode-lore-context-at-point` |
 | `C-c k n b` | `kmode-navigation-back` |
 | `C-c k n i` | `kmode-follow-include` |
 | `C-c k n k` | `kmode-find-kbuild` |
@@ -306,6 +316,23 @@ These dependencies are detected at use time and are not required to load
 Kmode.  consult-cscope remains independently configured and is not called by
 this map.
 
+The Lore map is:
+
+| Key | Command |
+| --- | --- |
+| `C-c k L .` | `kmode-lore-context-at-point` — symbol, narrowed by the current kernel file when available |
+| `C-c k L w` | `kmode-lore-why` — blame the line and follow a trusted Lore `Link:`, or search its context |
+| `C-c k L s` | `kmode-lore-search-symbol` |
+| `C-c k L q` | `kmode-lore-search` |
+| `C-c k L f` | `kmode-lore-search-file` |
+| `C-c k L d` | `kmode-lore-search-directory` |
+| `C-c k L c` | `kmode-lore-clear-cache` |
+
+`C-c k n l` is the high-frequency alias for `C-c k L .`.  With
+`kmode-global-mode`, `C-c k L s`, `C-c k L q`, and a symbol-only
+`C-c k L .` work from any buffer; file, directory, and provenance searches
+require kernel-tree context.
+
 ### Where symbol databases are stored
 
 Project-side index data follows the selected profile's output directory:
@@ -326,6 +353,12 @@ background indexing.  Shards for external headers that have no compilation
 database live under `clangd/index/` in the operating system's user-cache
 directory, not the kernel profile.  See clangd's official
 [index design](https://clangd.llvm.org/design/indexing.html).
+
+Lore's compact search cache defaults to
+`~/.emacs.d/kmode-emacs/lore/` (more precisely,
+`kmode-lore-cache-directory` below `user-emacs-directory`).  It is **not a
+symbol database** and is separate from every profile output above.  Clear only
+Kmode's matching Lore cache entries with `C-c k L c`.
 
 Kmode rejects `O=` and `KBUILD_OUTPUT=` in profile and per-call Make arguments;
 use the profile's `:output` property instead.  This keeps process locking,
@@ -667,7 +700,9 @@ checkstack requires a matching built `vmlinux`.
 | --- | --- |
 | `kmode-navigation-dwim` | Follow an include; resolve a `CONFIG_` symbol (or a symbol in Kconfig mode); otherwise use Xref |
 | `kmode-find-definition` | Ask the active Xref backend for the definition at point |
-| `kmode-find-callers` | Ask the active Xref backend for references/call sites |
+| `kmode-find-usages` | Find uses of a function, type, field, macro, or global through the configured backend cascade |
+| `kmode-find-function-callers` | Use cscope's dedicated indexed caller query when available; otherwise show semantic/text caller candidates |
+| `kmode-find-callers` | Compatibility entry point for `kmode-find-usages` |
 | `kmode-navigation-back` | Return through Xref's navigation history |
 | `kmode-find-config` | Find `config`/`menuconfig` declarations for a symbol |
 | `kmode-grep-config-users` | Search common kernel source/data formats for `CONFIG_<symbol>` |
@@ -687,8 +722,23 @@ checkstack requires a matching built `vmlinux`.
 | `kmode-cscope-find-includers` | Find files including the file at point through xcscope |
 
 The standard Xref keys remain available: `M-.` finds a definition, `M-?`
-finds references/call sites, and `M-,` goes back.  `C-c k n d`, `C-c k n r`,
-and `C-c k n b` are explicit kernel-prefix aliases for those same workflows.
+asks the current Xref backend for references, and `M-,` goes back.
+`C-c k n r` is intentionally broader: `kmode-find-usages` with the default
+`kmode-usages-backend` of `auto` tries semantic Xref only when Eglot actively
+manages the buffer, then selected-profile cscope symbol occurrences, then an
+asynchronous ripgrep search (or asynchronous `rgrep` when `rg` is missing).
+A prefix argument (`C-u C-c k n r`) chooses a backend for that query;
+choose current Xref to use another active backend such as profile-local
+TAGS/Etags.  Textual and cscope
+result buffers carry persistent labels instead of claiming semantic precision;
+the Eglot/Xref path identifies its precision in the minibuffer.
+
+`C-c k n a` asks for function callers.  A usable cscope database gives its
+dedicated caller query; otherwise Eglot references or textual matches are
+shown as caller candidates because they can include non-call uses.  The direct
+`C-c k n C r` remains the cscope-only dedicated caller command.
+`C-c k n d` and `C-c k n b` remain definition/back shortcuts.
+
 `C-c k n t` builds the kernel `TAGS` table in the selected profile's output.
 With `kmode-auto-activate-tags` enabled, a readable profile table is bound
 buffer-locally for standard Xref/Etags use; Kmode does not rebuild it on buffer
@@ -721,6 +771,40 @@ silently attach the new profile to an old clangd index.
 `--completion-style=detailed`, and `--header-insertion=never`.  Add
 `--clang-tidy` only when its indexing cost and diagnostic policy fit the
 worktree; Kmode deliberately leaves it off by default.
+
+### Mailing-list context
+
+| Command | Purpose |
+| --- | --- |
+| `kmode-lore-context-at-point` | Search for the identifier at point, narrowed by the current kernel-relative file when available |
+| `kmode-lore-why` | Use Git blame and trusted `Link:` trailers to open the discussion behind the line, falling back to context search |
+| `kmode-lore-search-symbol` | Search Lore for a prompted/default identifier |
+| `kmode-lore-search-file` | Search for discussion naming a kernel-relative file |
+| `kmode-lore-search-directory` | Search for discussion of the current directory |
+| `kmode-lore-search` | Run a validated public-inbox query |
+| `kmode-lore-clear-cache` | Remove Kmode's regular Lore cache files without following symlinks |
+
+Searches default to the last five years; customize
+`kmode-lore-default-date-range` or edit the query when older history matters.
+The result buffer is a compact thread list:
+
+| Key | Result action |
+| --- | --- |
+| `RET` / `o` / `T` | Open the message in Emacs / externally / open its thread |
+| `w` / `m` | Copy the URL / `<Message-ID>` |
+| `g` / `s` | Force refresh / edit the search |
+| `N` / `P` | Next / previous result page |
+| `r` | Toggle date/relevance order |
+
+Every lookup is an explicit, read-only network action.  Kmode sends only the
+symbol, kernel-relative path, or query terms needed for the selected search;
+moving point performs no request and source contents are not uploaded.  A
+failed refresh may retain a cached page prominently labeled `STALE`.  The
+feature reads public archive pages; it never retrieves a series into the
+worktree, applies a patch, or sends mail.  Query syntax and Atom/thread
+endpoints follow the official
+[Lore public-inbox help](https://lore.kernel.org/all/_/text/help/) and
+[public-inbox documentation](https://public-inbox.org/public-inbox.html).
 
 ### Review and patch preparation
 
@@ -1009,7 +1093,8 @@ The next high-impact work is:
    compile-DB freshness, safe clangd reconnect, and richer diagnostics.
 3. Add structured check/KTAP/TAP results and evolve the existing heuristic
    impact plan toward provenance-aware dependency/build/test planning.
-4. b4-backed review worktrees, attestation/revision/trailer flows, validation
+4. Build on the implemented read-only Lore context browser with b4-backed
+   review worktrees, attestation/revision/trailer flows, validation
    manifests, and separately confirmed mail preview/send.
 5. Unify custom-QEMU and virtme-ng run identity, add managed
    serial/QMP/gdbstub sockets where the frontend permits, protect disk images,
@@ -1035,6 +1120,8 @@ kmode-emacs deliberately wraps upstream interfaces:
 - [QEMU system debugging](https://www.qemu.org/docs/master/system/gdb.html)
 - [virtme-ng README and workflows](https://github.com/arighi/virtme-ng/blob/main/README.md)
 - [virtme-ng public `vng` parser](https://github.com/arighi/virtme-ng/blob/main/virtme_ng/run.py)
+- [Lore public-inbox help](https://lore.kernel.org/all/_/text/help/) and the
+  [public-inbox documentation](https://public-inbox.org/public-inbox.html)
 - [b4 documentation](https://b4.docs.kernel.org/en/latest/) for the planned patch-series layer
 
 ## Contributing and license

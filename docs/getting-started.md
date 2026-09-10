@@ -19,11 +19,12 @@ kmode-emacs itself requires GNU Emacs 28.1 or newer and only Emacs Lisp librarie
 shipped with Emacs.  Individual workflows need their usual host tools:
 
 - `make` and a configured Linux source tree for Kbuild;
-- `rg` for the fastest source/Kconfig searches;
+- `rg` for the fastest source, Kconfig, and textual-usage searches;
 - Etags for the kernel `TAGS` target and indexed Xref fallback;
 - `clangd` plus Eglot for semantic definitions and callers;
 - `cscope` for the kernel-generated cscope database;
 - optional `xcscope.el` for Kmode's profile-aware cscope query adapter;
+- HTTPS access to `lore.kernel.org` for explicit mailing-list context;
 - `vng` (virtme-ng) for the integrated virtual-kernel workflow; and
 - the kernel-tree scripts or tools named by a check, test, or review action.
 
@@ -66,10 +67,14 @@ state remain local to kernel buffers.  To opt in one buffer without the
 global launcher, omit the final line and run `M-x kmode-mode` from a kernel
 checkout.  Optionally set `kmode-default-root` to a kernel root or a directory
 below one for the launcher to try before prompting.  `C-c k k` and
-`C-c k R` are the only prefix commands that establish context outside a kernel
-tree.  With the global mode enabled, use every other command from a kernel
-buffer or the pinned dashboard.  With only local mode, use the prefix in kernel
-buffers and the dashboard's buttons plus `g`, `p`, and `d`.
+`C-c k R` establish kernel context outside a tree.  Explicit public Lore
+symbol and custom-query searches (`C-c k L s` and `C-c k L q`) do not need a
+kernel root; context at point (`C-c k L .` or `C-c k n l`) can also fall back
+to a symbol-only search.  Path-aware context, file, directory, and line-origin
+searches need a recognized kernel tree.  With global mode enabled, use other
+commands from a kernel buffer or the pinned dashboard.  With only local mode,
+use the prefix in kernel buffers and the dashboard's buttons plus `g`, `p`,
+and `d`.
 
 In CC Mode buffers, the default style layers the complete CC Mode offset
 table published in the kernel documentation—including tab-only argument-list
@@ -149,9 +154,22 @@ The short answer is:
 | Task | Standard key | kmode-emacs key |
 | --- | --- | --- |
 | Definition at point | `M-.` | `C-c k n d` |
-| References/callers | `M-?` | `C-c k n r` |
+| All usages of function, type, field, macro, or global | `M-?` | `C-c k n r` |
+| Function caller candidates | — | `C-c k n a` |
+| Mailing-list context | — | `C-c k n l` |
 | Return to previous location | `M-,` | `C-c k n b` |
 | Context-sensitive kernel jump | — | `C-c k n .` |
+
+`C-c k n r` is the universal command.  In automatic mode it prefers semantic
+references from an active Eglot/clangd session, then selected-profile cscope
+symbol occurrences, then a responsive asynchronous ripgrep search (or Emacs
+`rgrep` when `rg` is absent).  Text and cscope buffers say clearly that their
+results are not semantic.  Use `C-u C-c k n r` to choose one backend for the
+query, including current Xref when you want to use profile TAGS/Etags.
+
+`C-c k n a` is function-specific.  It uses the dedicated indexed cscope
+caller query when available; otherwise it shows Eglot references or textual
+matches as caller candidates because those can include non-call uses.
 
 When Eglot manages the buffer, definitions and references come from clangd's
 semantic index.  Set it up for the active profile once its kernel output is
@@ -164,7 +182,8 @@ configured:
 4. Run `C-c k n e` to start clangd against
    `<profile-output>/compile_commands.json`.
 5. Put point on a function and use `C-c k n d` for its implementation,
-   `C-c k n r` for references/call sites, and `C-c k n b` to return.
+   `C-c k n r` for every usage, `C-c k n a` for function caller candidates,
+   and `C-c k n b` to return.
 
 By default, `kmode-clangd-arguments` adds `--background-index`,
 `--completion-style=detailed`, and `--header-insertion=never`.  Add
@@ -195,7 +214,7 @@ this profile-aware submap:
 | --- | --- |
 | `C-c k n C b` | Build the selected profile's database with kernel `make cscope` |
 | `C-c k n C d` | Find a definition |
-| `C-c k n C r` | Find callers |
+| `C-c k n C r` | Run the dedicated indexed cscope caller query |
 | `C-c k n C c` | Find callees |
 | `C-c k n C s` | Find a symbol |
 | `C-c k n C t` | Find text |
@@ -207,7 +226,9 @@ readable database.  `cscope.files` alone is an input list, not a queryable
 database.  During each query Kmode pins xcscope to the selected output,
 standard database names, query-only mode, the resolved program, and kernel
 mode, then restores the user's settings.  Loading Kmode never requires
-`xcscope.el`, and `consult-cscope` remains independently configured.
+`xcscope.el`, and `consult-cscope` remains independently configured.  The
+canonical xcscope result buffer is preserved so its rerun and history behavior
+continues to work.
 
 The selected profile keeps its project-side indexes together:
 `<profile-output>/TAGS`, `<profile-output>/cscope.files` plus `cscope.out` and
@@ -222,7 +243,9 @@ lock stays coherent.
 clangd stores shards for external headers without a compilation database in
 the operating system's user cache; its
 [index design](https://clangd.llvm.org/design/indexing.html) describes that
-split.
+split.  Lore search metadata is different: it defaults to
+`~/.emacs.d/kmode-emacs/lore/`, is not a symbol database, and can be
+cleared with `C-c k L c` without touching project indexes.
 
 The rest of the navigation map does not require clangd:
 
@@ -237,10 +260,49 @@ The rest of the navigation map does not require clangd:
 | `C-c k n D` | Search the checkout's `Documentation/` tree |
 | `C-c k n t` | Build and optionally activate the selected profile's `TAGS` table |
 | `C-c k n C` | Open the optional profile-aware xcscope map |
+| `C-c k n l` | Search Lore for the symbol and available file context |
 
 These are deliberately useful on a partially configured tree.  Include and
 source/header resolution are heuristics rather than a replacement for the C
 preprocessor or Kbuild dependency analysis.
+
+## Mailing-list context with Lore
+
+Lore searches are explicit, read-only public-inbox requests.  The full map is:
+
+| Key | Task |
+| --- | --- |
+| `C-c k L .` | Search for the symbol at point, narrowed by the current kernel file when available |
+| `C-c k L w` | Blame the current line and open a trusted Lore `Link:`, or search its context |
+| `C-c k L s` | Search for a symbol |
+| `C-c k L q` | Enter a public-inbox query |
+| `C-c k L f` | Search discussion touching the current kernel file |
+| `C-c k L d` | Search discussion touching the current kernel directory |
+| `C-c k L c` | Clear Kmode Lore cache entries |
+
+`C-c k n l` aliases the context-at-point command.  With
+`kmode-global-mode`, symbol search, custom queries, and symbol-only context can
+run from any buffer; file, directory, and line-provenance commands require a
+recognized kernel tree.  Context and symbol searches default to the last five
+years through `kmode-lore-default-date-range`; set it to nil or edit a query
+when older history matters.
+
+The result list keeps normal Emacs navigation:
+
+| Result key | Action |
+| --- | --- |
+| `RET` / `o` / `T` | Read in Emacs / open externally / open the thread view |
+| `w` / `m` | Copy the URL / Message-ID |
+| `g` / `s` | Force a live refresh / edit the query |
+| `N` / `P` | Next / previous page |
+| `r` | Toggle date and relevance order |
+
+Only the selected query terms, identifiers, and kernel-relative paths are sent;
+source buffer contents are not uploaded, moving point makes no request, and
+Kmode never retrieves a series into the checkout, applies a patch, or sends
+mail.  Results are cached briefly and a network failure can show a visibly
+`STALE` page.  Query syntax follows the official
+[public-inbox help](https://lore.kernel.org/all/_/text/help/).
 
 ## First virtme-ng workflow
 
@@ -305,10 +367,12 @@ installed virtme-ng/kernel combination as an integration smoke test and inspect
 ### Understand unfamiliar code
 
 1. `C-c k n .` — do the right thing for the token or include at point.
-2. `C-c k n d` / `r` — move between a symbol and references/call sites;
-   results are semantic with Eglot/clangd and backend-dependent otherwise.
-3. `C-c k n k` — inspect how the current directory is built.
-4. `C-c k n c` / `u` — move between Kconfig declaration and consumers.
+2. `C-c k n d` / `r` — move between a symbol and all of its usages; use
+   `C-c k n a` for function callers.
+3. `C-c k n l` — pull up recent mailing-list discussion for that symbol and
+   file without leaving Emacs.
+4. `C-c k n k` — inspect how the current directory is built.
+5. `C-c k n c` / `u` — move between Kconfig declaration and consumers.
 
 ### Boot and debug
 
@@ -325,8 +389,9 @@ installed virtme-ng/kernel combination as an integration smoke test and inspect
   `K[profile]` lighter outside a recognized tree: the key is global, but the
   editing cockpit is local.
 - Outside a kernel tree, use `C-c k k` to open a dashboard or `C-c k R` to
-  select a root; they are the only outside-tree entry points.  In the dashboard
-  press `d` for Doctor.  `C-c k ?` works directly only from a kernel buffer or
+  select kernel context.  Global Lore symbol, custom-query, and symbol-only
+  context searches remain available without one.  In the dashboard press `d`
+  for Doctor.  `C-c k ?` works directly only from a kernel buffer or
   dashboard and reports executable, artifact, architecture, guest-root, and
   vng configuration status.
 - Run `C-c k v s` before vng actions and inspect Compilation buffers for the
@@ -336,10 +401,11 @@ installed virtme-ng/kernel combination as an integration smoke test and inspect
 - Host-sensitive vng options require confirmation by default.  Nonempty
   upstream `default_opts` fail closed until explicitly trusted and still must
   pass typed validation.
-- If definition/caller lookup has no backend, confirm Eglot is installed,
-  `clangd` is on Emacs's `exec-path`, the active output contains a readable
+- If definition lookup has no backend, confirm Eglot is installed, `clangd`
+  is on Emacs's `exec-path`, the active output contains a readable
   `compile_commands.json`, and `C-c k n e` succeeded; alternatively build a
-  `TAGS` table with `C-c k n t` for indexed, non-semantic lookup.
+  `TAGS` table with `C-c k n t` for indexed, non-semantic lookup.  Universal
+  usages still fall back to asynchronous text search.
 - For cscope queries, confirm Doctor finds `cscope` and `xcscope.el`, then
   build a database with `C-c k n C b`.  Dashboard and Doctor check only the
   selected profile's output `cscope.out`, and queries use that same database.

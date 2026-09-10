@@ -61,6 +61,32 @@ restarting them explicit through `kmode-eglot-ensure'."
   :type 'integer
   :group 'kmode)
 
+(defcustom kmode-usages-backend 'auto
+  "Backend used by `kmode-find-usages'.
+
+`auto' prefers semantic Xref references when Eglot manages the current
+buffer, then profile-local cscope symbol occurrences, and finally a clearly
+labelled textual tree search.  `xref' forces the current Xref backend even
+when Kmode cannot establish that it is semantic.  `cscope' requires the
+optional profile-local xcscope adapter, and `text' always searches text.
+
+A prefix argument to `kmode-find-usages' chooses a backend for one query."
+  :type '(choice (const :tag "Best available backend" auto)
+                 (const :tag "Current Xref backend" xref)
+                 (const :tag "Profile-local cscope occurrences" cscope)
+                 (const :tag "Text matches" text))
+  :group 'kmode)
+
+(defcustom kmode-usages-text-files
+  (concat "*.c *.h *.S *.s *.rs *.dts *.dtsi *.yaml *.yml "
+          "*.lds *.ld *.py *.sh *.rst *.md *.txt "
+          "Kconfig Kconfig.* Makefile Makefile.* Kbuild Kbuild.*")
+  "File patterns searched by the textual `kmode-find-usages' fallback.
+
+The value uses the same space-separated shell-pattern syntax as `rgrep'."
+  :type 'string
+  :group 'kmode)
+
 (defcustom kmode-clangd-arguments
   '("--background-index"
     "--completion-style=detailed"
@@ -325,13 +351,204 @@ it uses the best Tags or major-mode backend available to Emacs."
   (call-interactively #'xref-find-definitions))
 
 ;;;###autoload
-(defun kmode-find-callers ()
-  "Find references and call sites for the identifier at point.
+(defun kmode--kernel-identifier-at-point ()
+  "Return the kernel identifier at point, or nil.
 
-With Eglot/clangd these are semantic references.  Other Xref backends may
-provide a broader textual result set."
-  (interactive)
-  (call-interactively #'xref-find-references))
+When point is on `struct', `union', `enum', or `typedef', return the next
+identifier.  Thus the same command works on both `struct task_struct' and an
+ordinary `task_struct' use."
+  (let* ((bounds (bounds-of-thing-at-point 'symbol))
+         (identifier (and bounds
+                          (buffer-substring-no-properties
+                           (car bounds) (cdr bounds)))))
+    (save-excursion
+      (while (and bounds
+                  (member identifier '("struct" "union" "enum" "typedef")))
+        (goto-char (cdr bounds))
+        (skip-syntax-forward " ")
+        (setq bounds (bounds-of-thing-at-point 'symbol)
+              identifier
+              (and bounds
+                   (buffer-substring-no-properties
+                    (car bounds) (cdr bounds)))))
+      (and identifier
+           (string-match-p "\\`[[:alpha:]_][[:alnum:]_]*\\'" identifier)
+           identifier))))
+
+(defun kmode--read-kernel-identifier ()
+  "Return the identifier at point, prompting when point has none."
+  (or (kmode--kernel-identifier-at-point)
+      (read-string "Kernel identifier usages: ")))
+
+(defun kmode--eglot-semantic-references-p ()
+  "Return non-nil when Eglot provides semantic Xref in this buffer."
+  (and (featurep 'eglot)
+       (fboundp 'eglot-current-server)
+       (ignore-errors (eglot-current-server))))
+
+(defun kmode--select-usages-backend (&optional requested)
+  "Resolve REQUESTED or `kmode-usages-backend' for the current buffer."
+  (let ((requested (or requested kmode-usages-backend)))
+    (pcase requested
+      ('auto (cond ((kmode--eglot-semantic-references-p) 'xref)
+                   ((kmode-cscope-available-p) 'cscope)
+                   (t 'text)))
+      ((or 'xref 'cscope 'text) requested)
+      (_ (user-error "Unknown Kmode usages backend: %S" requested)))))
+
+(defun kmode--read-usages-backend ()
+  "Prompt for a one-query usage-search backend."
+  (let* ((choices
+          '(("automatic: Eglot, cscope, then text" . auto)
+            ("current Xref backend" . xref)
+            ("profile-local cscope occurrences" . cscope)
+            ("text matches" . text)))
+         (choice (completing-read "Usage-search backend: " choices nil t)))
+    (cdr (assoc choice choices))))
+
+(defun kmode--label-usages-buffer (buffer name warning)
+  "Give BUFFER an optional result NAME and persistent WARNING label."
+  (when (buffer-live-p buffer)
+    (with-current-buffer buffer
+      (when name
+        (rename-buffer name t))
+      (setq-local header-line-format
+                  (propertize (concat " " warning) 'face 'warning)))
+    buffer))
+
+(defun kmode--start-rg-usages (identifier root rg)
+  "Start an asynchronous Ripgrep search for IDENTIFIER below ROOT using RG."
+  (let* ((arguments
+          (append
+           (list rg "--no-config" "--line-number" "--no-heading" "--with-filename"
+                 "--color" "never" "--fixed-strings" "--word-regexp")
+           (cl-mapcan
+            (lambda (pattern) (list "--glob" pattern))
+            (split-string kmode-usages-text-files nil t))
+           (list "--" identifier ".")))
+         (command (mapconcat #'shell-quote-argument arguments " "))
+         (default-directory root))
+    (compilation-start
+     command 'grep-mode
+     (lambda (_mode)
+       (generate-new-buffer-name
+        (format "*kmode textual usages: %s*" identifier))))))
+
+(defun kmode--find-textual-usages (identifier)
+  "Find explicitly labelled textual occurrences of IDENTIFIER."
+  (let* ((root (kmode-root))
+         (context (kmode-resolve-context root))
+         (rg (kmode-tool-path "rg" context))
+         (buffer
+          (if rg
+              (kmode--start-rg-usages identifier root rg)
+            (grep-compute-defaults)
+            (rgrep (concat "\\<" (regexp-quote identifier) "\\>")
+                   kmode-usages-text-files root)
+            next-error-last-buffer)))
+    (message "Kmode usages: %s matches (not semantic references)"
+             (if rg "ripgrep text" "grep text"))
+    (kmode--label-usages-buffer
+     buffer
+     (format "*kmode textual usages: %s*" identifier)
+     (concat (if rg "RIPGREP" "GREP")
+             " TEXT MATCHES - not semantic; may include declarations, "
+             "definitions, comments, strings, and inactive code"))))
+
+;;;###autoload
+(defun kmode-find-usages (identifier &optional backend)
+  "Find usages and callers of kernel IDENTIFIER.
+
+This command handles functions, struct/union/enum types, fields, macros, and
+globals.  Automatic selection uses Eglot/clangd semantic Xref references,
+then profile-local cscope symbol occurrences, then a labelled textual search.
+For functions the latter two include discoverable call sites, but they do not
+claim semantic precision.
+
+BACKEND overrides `kmode-usages-backend' for this query.  Interactively, a
+prefix argument prompts for that one-query override."
+  (interactive
+   (list (kmode--read-kernel-identifier)
+         (and current-prefix-arg (kmode--read-usages-backend))))
+  (unless (and identifier
+               (string-match-p
+                "\\`[[:alpha:]_][[:alnum:]_]*\\'" identifier))
+    (user-error "Not a C/kernel identifier: %s" identifier))
+  (pcase (kmode--select-usages-backend backend)
+    ('xref
+     (message
+      (if (kmode--eglot-semantic-references-p)
+          "Kmode usages: semantic references from Eglot/clangd"
+        "Kmode usages: current Xref backend; precision is backend-defined"))
+     (xref-find-references identifier))
+    ('cscope
+     (unless (kmode-cscope-available-p)
+       (user-error
+        "Cscope usages unavailable; run kmode-doctor or choose auto/text"))
+     (message
+      "Kmode usages: cscope symbol occurrences (indexed, not semantic)")
+     (kmode--call-xcscope #'cscope-find-this-symbol identifier)
+     (kmode--label-usages-buffer
+      (get-buffer cscope-output-buffer-name)
+      nil
+      (format (concat "CSCOPE SYMBOL OCCURRENCES for %s - indexed, not "
+                      "semantic; includes declarations and definitions")
+              identifier)))
+    ('text (kmode--find-textual-usages identifier))))
+
+;;;###autoload
+(defun kmode-find-function-callers (identifier)
+  "Find caller candidates for function IDENTIFIER.
+
+Prefer cscope's dedicated function-caller query.  Without cscope, use
+Eglot/clangd semantic references while stating that reference results can
+include non-call uses.  The final fallback is a persistently labelled textual
+candidate search, not a claim of an exact call graph."
+  (interactive (list (kmode--read-kernel-identifier)))
+  (unless (and identifier
+               (string-match-p
+                "\\`[[:alpha:]_][[:alnum:]_]*\\'" identifier))
+    (user-error "Not a C/kernel identifier: %s" identifier))
+  (cond
+   ((kmode-cscope-available-p)
+    (message "Kmode callers: cscope's dedicated function-caller query")
+    (kmode--call-xcscope
+     #'cscope-find-functions-calling-this-function identifier)
+    (kmode--label-usages-buffer
+     (get-buffer cscope-output-buffer-name)
+     nil
+     (format "CSCOPE FUNCTION CALLERS for %s - dedicated indexed caller query"
+             identifier)))
+   ((kmode--eglot-semantic-references-p)
+    (message
+     (concat "Kmode caller candidates: Eglot/clangd references; "
+             "results can include non-call uses"))
+    (xref-find-references identifier))
+   (t
+    (message
+     (concat "Kmode caller candidates: textual matches; "
+             "results can include non-call uses"))
+    (kmode--label-usages-buffer
+     (kmode--find-textual-usages identifier)
+     (format "*kmode textual caller candidates: %s*" identifier)
+     (concat "TEXTUAL CALLER CANDIDATES - not semantic; may include "
+             "declarations, definitions, comments, strings, inactive code, "
+             "and non-call uses")))))
+
+;;;###autoload
+(defun kmode-find-callers (&optional identifier backend)
+  "Compatibility command for `kmode-find-usages'.
+
+IDENTIFIER and BACKEND are forwarded to `kmode-find-usages'.  Interactively,
+the identifier comes from point and a prefix argument prompts for the backend.
+
+For functions, results contain discoverable callers.  For types, fields,
+macros, and globals, results contain usages."
+  (interactive
+   (list (kmode--read-kernel-identifier)
+         (and current-prefix-arg (kmode--read-usages-backend))))
+  (kmode-find-usages
+   (or identifier (kmode--read-kernel-identifier)) backend))
 
 ;;;###autoload
 (defun kmode-navigation-back ()
@@ -457,8 +674,10 @@ evaluated by xcscope's native `cscope-rerun-search-at-point' command."
       ;; Protect the replacement as well, so repeated `r' commands are safe.
       (kmode--protect-xcscope-result-rerun buffer start state t))))
 
-(defun kmode--call-xcscope (command)
-  "Invoke xcscope COMMAND against the active kernel profile."
+(defun kmode--call-xcscope (command &optional identifier)
+  "Invoke xcscope COMMAND against the active kernel profile.
+
+Pass IDENTIFIER directly to COMMAND when non-nil; otherwise prompt normally."
   (unless (require 'xcscope nil t)
     (user-error "Xcscope.el is unavailable; install xcscope for this adapter"))
   (let* ((context (kmode-resolve-context))
@@ -478,7 +697,9 @@ evaluated by xcscope's native `cscope-rerun-search-at-point' command."
        (lambda ()
          (cl-progv (mapcar #'car state) (mapcar #'cdr state)
            (let ((default-directory (kmode-context-root context)))
-             (call-interactively command)))))
+             (if identifier
+                 (funcall command identifier)
+               (call-interactively command))))))
       (kmode--protect-xcscope-result-rerun
        output-buffer start state))))
 
@@ -572,8 +793,12 @@ evaluated by xcscope's native `cscope-rerun-search-at-point' command."
  'find-definition "Find definition" "Navigate" #'kmode-find-definition
  :description "Use clangd/Eglot or the active Xref backend")
 (kmode-register-action
- 'find-callers "Find references / callers" "Navigate" #'kmode-find-callers
- :description "List semantic call sites when clangd is active")
+ 'find-callers "Find usages / callers" "Navigate" #'kmode-find-usages
+ :description "Prefer clangd semantics, then cscope, then labelled text matches")
+(kmode-register-action
+ 'function-callers "Find function callers" "Navigate"
+ #'kmode-find-function-callers
+ :description "Prefer cscope callers, then semantic or textual candidates")
 (kmode-register-action
  'find-config "Find Kconfig symbol" "Navigate" #'kmode-find-config)
 (kmode-register-action
